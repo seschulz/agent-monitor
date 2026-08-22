@@ -1,0 +1,77 @@
+name: Build macOS release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build release app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project AgentMonitor.xcodeproj \
+            -scheme AgentMonitor \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package app
+        id: package
+        run: |
+          set -euo pipefail
+          app="build/Build/Products/Release/Agent Monitor.app"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.${GITHUB_RUN_NUMBER}"
+          fi
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$app/Contents/Info.plist"
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+
+          staging="$RUNNER_TEMP/Agent Monitor"
+          mkdir -p "$staging"
+          ditto "$app" "$staging/Agent Monitor.app"
+          ln -s /Applications "$staging/Applications"
+          mkdir -p dist
+          image="Agent-Monitor-$version.dmg"
+          hdiutil create -volname "Agent Monitor" -srcfolder "$staging" -format UDZO -ov "dist/$image"
+          cd dist
+          shasum -a 256 "$image" > "$image.sha256"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Agent-Monitor-${{ github.ref_name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "Agent Monitor $GITHUB_REF_NAME" \
+              --generate-notes
+          fi
