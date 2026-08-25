@@ -9,6 +9,8 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
     private var menuPanel: StatusMenuPanel?
     private var statusItem: NSStatusItem?
     private var settingsWindowController: NSWindowController?
+    private var diagnosticsWindowController: NSWindowController?
+    private let diagnosticsWindowState = DiagnosticsWindowState()
     private var completionResetTask: Task<Void, Never>?
     private var localEventMonitor: Any?
     private var globalEventMonitor: Any?
@@ -66,7 +68,8 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
 
         let hostingController = NSHostingController(rootView: MenuContentView(
             store: runtime.store,
-            onOpenSettings: { [weak self] in self?.showSettings() }
+            onOpenSettings: { [weak self] in self?.showSettings() },
+            onOpenDiagnostics: { [weak self] sessionID in self?.showDiagnostics(sessionID: sessionID) }
         ))
         hostingController.view.wantsLayer = true
         hostingController.view.layer?.backgroundColor = NSColor.clear.cgColor
@@ -74,9 +77,10 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
         menuPanel = panel
         updateMenuPanelSize()
 
-        runtime.store.objectWillChange
+        runtime.store.$sessions
+            .dropFirst()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in
+            .sink { [weak self] _ in
                 self?.updateMenuPanelSize()
             }
             .store(in: &cancellables)
@@ -210,6 +214,37 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
         NSApplication.shared.activate(ignoringOtherApps: true)
         settingsWindowController?.showWindow(nil)
         settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func showDiagnostics(sessionID: String?) {
+        guard runtime.store.diagnosticsEnabled else { return }
+        hideMenuPanel()
+        if let sessionID {
+            diagnosticsWindowState.selectedSessionID = sessionID
+        }
+        if diagnosticsWindowController == nil {
+            let hostingController = NSHostingController(rootView: DiagnosticTimelineView(
+                store: runtime.store,
+                state: diagnosticsWindowState
+            ))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 860, height: 560),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Agent Monitor Diagnostics"
+            window.contentViewController = hostingController
+            window.isReleasedWhenClosed = false
+            window.minSize = NSSize(width: 780, height: 500)
+            window.setFrameAutosaveName("AgentMonitorDiagnostics")
+            window.center()
+            diagnosticsWindowController = NSWindowController(window: window)
+        }
+
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        diagnosticsWindowController?.showWindow(nil)
+        diagnosticsWindowController?.window?.makeKeyAndOrderFront(nil)
     }
 
     private func offerIntegrationSetupIfNeeded() {

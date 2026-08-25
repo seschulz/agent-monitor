@@ -5,9 +5,72 @@ import AgentMonitorShared
 import Foundation
 import UserNotifications
 
+enum DiagnosticEventOutcome: String, Codable, Sendable {
+    case applied
+    case ignoredDuplicate
+    case ignoredStaleSession
+    case ignoredCompletedTurn
+    case ignoredOutOfOrder
+
+    var label: String {
+        switch self {
+        case .applied: "Applied"
+        case .ignoredDuplicate: "Ignored: duplicate"
+        case .ignoredStaleSession: "Ignored: stale session"
+        case .ignoredCompletedTurn: "Ignored: completed turn"
+        case .ignoredOutOfOrder: "Ignored: out of order"
+        }
+    }
+}
+
+struct DiagnosticTimelineEntry: Codable, Identifiable, Equatable, Sendable {
+    let id: UUID
+    let receivedAt: Date
+    let event: MonitorEvent
+    let previousStatus: SessionStatus?
+    let resultingStatus: SessionStatus?
+    let outcome: DiagnosticEventOutcome
+    let completionSignalEmitted: Bool
+    let notificationTriggered: Bool
+    let speechTriggered: Bool
+
+    init(
+        id: UUID = UUID(),
+        receivedAt: Date = Date(),
+        event: MonitorEvent,
+        previousStatus: SessionStatus?,
+        resultingStatus: SessionStatus?,
+        outcome: DiagnosticEventOutcome,
+        completionSignalEmitted: Bool = false,
+        notificationTriggered: Bool = false,
+        speechTriggered: Bool = false
+    ) {
+        self.id = id
+        self.receivedAt = receivedAt
+        self.event = event
+        self.previousStatus = previousStatus
+        self.resultingStatus = resultingStatus
+        self.outcome = outcome
+        self.completionSignalEmitted = completionSignalEmitted
+        self.notificationTriggered = notificationTriggered
+        self.speechTriggered = speechTriggered
+    }
+
+    var sessionID: String { event.scopedSessionID }
+}
+
+struct DiagnosticSessionSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let displayName: String
+    let provider: AgentProvider
+    let eventCount: Int
+    let updatedAt: Date
+}
+
 @MainActor
 final class SessionStore: ObservableObject {
     @Published private(set) var sessions: [SessionRecord] = []
+    @Published private(set) var diagnosticEvents: [DiagnosticTimelineEntry] = []
     @Published var lastMessage: String?
     @Published private(set) var displayDate = Date()
     var onCompletion: (() -> Void)?
@@ -16,7 +79,12 @@ final class SessionStore: ObservableObject {
     private var messageClearTask: Task<Void, Never>?
     private var persistenceErrorMessage: String?
     private let persistenceURL: URL
+    private let diagnosticPersistenceURL: URL
     private let defaults: UserDefaults
+    private let capturesDiagnostics: Bool
+    private static let diagnosticRetention: TimeInterval = 7 * 24 * 60 * 60
+    private static let maximumDiagnosticEventsPerSession = 100
+    private static let maximumDiagnosticEvents = 1_000
     private var readyRetention: TimeInterval {
         let minutes = defaults.integer(forKey: "readyRetentionMinutes")
         return TimeInterval(max(minutes, 1) * 60)
@@ -26,11 +94,22 @@ final class SessionStore: ObservableObject {
         return TimeInterval(max(minutes, 1) * 60)
     }
 
-    init(baseDirectory: URL = AppPaths.baseDirectory, defaults: UserDefaults = .standard) {
+    init(
+        baseDirectory: URL = AppPaths.baseDirectory,
+        defaults: UserDefaults = .standard,
+        diagnosticsEnabled: Bool? = nil
+    ) {
         persistenceURL = baseDirectory.appendingPathComponent("sessions.json")
+        diagnosticPersistenceURL = baseDirectory.appendingPathComponent("diagnostics.json")
         self.defaults = defaults
+        capturesDiagnostics = diagnosticsEnabled
+            ?? (defaults.bool(forKey: "internalDiagnosticsEnabled")
+                || ProcessInfo.processInfo.arguments.contains("--internal-diagnostics"))
         load()
+        if capturesDiagnostics { loadDiagnostics() }
     }
+
+    var diagnosticsEnabled: Bool { capturesDiagnostics }
 
     var visibleSessions: [SessionRecord] {
         sessions.filter { ($0.status == .running || $0.status == .ready) && $0.dismissedAt == nil }.sorted {
@@ -54,13 +133,18 @@ final class SessionStore: ObservableObject {
     }
 
     func apply(_ event: MonitorEvent) {
-        guard !seenEventIDs.contains(event.eventId) else { return }
+        let sessionID = event.scopedSessionID
+        let previousStatus = sessions.first(where: { $0.id == sessionID })?.status
+        guard !seenEventIDs.contains(event.eventId) else {
+            recordDiagnostic(event, previousStatus: previousStatus, outcome: .ignoredDuplicate)
+            return
+        }
         seenEventIDs.insert(event.eventId)
         if seenEventIDs.count > 10_000 { seenEventIDs.removeAll(keepingCapacity: true) }
 
-        let sessionID = event.scopedSessionID
         if event.eventType == .postToolUse,
            sessions.first(where: { $0.id == sessionID })?.status == .stale {
+            recordDiagnostic(event, previousStatus: previousStatus, outcome: .ignoredStaleSession)
             return
         }
         // Codex Stop means the turn is no longer active, including when the
@@ -70,17 +154,21 @@ final class SessionStore: ObservableObject {
            let existing = sessions.first(where: { $0.id == sessionID }),
            existing.completedAt != nil,
            event.turnId == nil || event.turnId == existing.currentTurnId {
+            recordDiagnostic(event, previousStatus: previousStatus, outcome: .ignoredCompletedTurn)
             return
         }
         if Self.isCompletion(event),
            let existing = sessions.first(where: { $0.id == sessionID }),
            existing.completedAt != nil,
            event.turnId == nil || event.turnId == existing.currentTurnId {
+            recordDiagnostic(event, previousStatus: previousStatus, outcome: .ignoredCompletedTurn)
             return
         }
-        let previousStatus = sessions.first(where: { $0.id == sessionID })?.status
         if let index = sessions.firstIndex(where: { $0.id == sessionID }) {
-            guard event.occurredAt >= sessions[index].updatedAt else { return }
+            guard event.occurredAt >= sessions[index].updatedAt else {
+                recordDiagnostic(event, previousStatus: previousStatus, outcome: .ignoredOutOfOrder)
+                return
+            }
             let advancesTurn = event.eventType == .userPromptSubmit
                 || event.eventType == .agentTurnComplete
                 || event.eventType == .stop
@@ -113,12 +201,24 @@ final class SessionStore: ObservableObject {
         prune()
         persist()
         let isDismissed = sessions.first(where: { $0.id == sessionID })?.dismissedAt != nil
-        if !isDismissed && Self.shouldSpeakCompletion(for: event, previousStatus: previousStatus) {
+        let emitsCompletionSignal = !isDismissed
+            && Self.shouldSpeakCompletion(for: event, previousStatus: previousStatus)
+        recordDiagnostic(
+            event,
+            previousStatus: previousStatus,
+            resultingStatus: sessions.first(where: { $0.id == sessionID })?.status,
+            outcome: .applied,
+            completionSignalEmitted: emitsCompletionSignal,
+            notificationTriggered: emitsCompletionSignal && defaults.bool(forKey: "notificationsEnabled"),
+            speechTriggered: emitsCompletionSignal
+                && defaults.bool(forKey: "speechEnabled")
+                && defaults.bool(forKey: "speakOnCompletion")
+        )
+        if emitsCompletionSignal {
             onCompletion?()
             notify(title: displayName(for: event.cwd), body: "\(event.provider.displayName) is ready")
         }
-        if !isDismissed,
-           Self.shouldSpeakCompletion(for: event, previousStatus: previousStatus) {
+        if emitsCompletionSignal {
             speak("\(event.provider.displayName) finished", enabledBy: "speakOnCompletion")
         }
     }
@@ -151,7 +251,40 @@ final class SessionStore: ObservableObject {
 
     func clearAll() {
         sessions.removeAll()
+        diagnosticEvents.removeAll()
         persist()
+        persistDiagnostics()
+    }
+
+    var diagnosticSessionSummaries: [DiagnosticSessionSummary] {
+        Dictionary(grouping: diagnosticEvents, by: \.sessionID).compactMap { sessionID, entries in
+            guard let latest = entries.max(by: { $0.receivedAt < $1.receivedAt }) else { return nil }
+            let name = URL(fileURLWithPath: latest.event.cwd).lastPathComponent
+            return DiagnosticSessionSummary(
+                id: sessionID,
+                displayName: name.isEmpty ? "Agent session" : name,
+                provider: latest.event.provider,
+                eventCount: entries.count,
+                updatedAt: latest.receivedAt
+            )
+        }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func diagnosticEntries(for sessionID: String) -> [DiagnosticTimelineEntry] {
+        diagnosticEvents
+            .filter { $0.sessionID == sessionID }
+            .sorted { $0.receivedAt > $1.receivedAt }
+    }
+
+    func diagnosticJSON(for sessionID: String) -> String? {
+        let entries = diagnosticEntries(for: sessionID).reversed()
+        guard let data = try? JSONEncoder.monitorEncoder.encode(Array(entries)) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func clearDiagnostics(for sessionID: String) {
+        diagnosticEvents.removeAll { $0.sessionID == sessionID }
+        persistDiagnostics()
     }
 
     func reconcileProcesses() {
@@ -257,6 +390,78 @@ final class SessionStore: ObservableObject {
             try? FileManager.default.moveItem(at: persistenceURL, to: backup)
             sessions = []
             lastMessage = "Session history was unreadable and moved aside."
+        }
+    }
+
+    private func recordDiagnostic(
+        _ event: MonitorEvent,
+        previousStatus: SessionStatus?,
+        resultingStatus: SessionStatus? = nil,
+        outcome: DiagnosticEventOutcome,
+        completionSignalEmitted: Bool = false,
+        notificationTriggered: Bool = false,
+        speechTriggered: Bool = false
+    ) {
+        guard capturesDiagnostics else { return }
+        diagnosticEvents.append(DiagnosticTimelineEntry(
+            event: event,
+            previousStatus: previousStatus,
+            resultingStatus: resultingStatus ?? previousStatus,
+            outcome: outcome,
+            completionSignalEmitted: completionSignalEmitted,
+            notificationTriggered: notificationTriggered,
+            speechTriggered: speechTriggered
+        ))
+        pruneDiagnostics()
+        persistDiagnostics()
+    }
+
+    private func pruneDiagnostics(now: Date = Date()) {
+        diagnosticEvents.removeAll {
+            now.timeIntervalSince($0.receivedAt) > Self.diagnosticRetention
+        }
+
+        var counts: [String: Int] = [:]
+        var retained: [DiagnosticTimelineEntry] = []
+        for entry in diagnosticEvents.reversed() {
+            let count = counts[entry.sessionID, default: 0]
+            guard count < Self.maximumDiagnosticEventsPerSession else { continue }
+            counts[entry.sessionID] = count + 1
+            retained.append(entry)
+            if retained.count == Self.maximumDiagnosticEvents { break }
+        }
+        diagnosticEvents = retained.reversed()
+    }
+
+    private func loadDiagnostics() {
+        guard FileManager.default.fileExists(atPath: diagnosticPersistenceURL.path),
+              let data = try? Data(contentsOf: diagnosticPersistenceURL),
+              let entries = try? JSONDecoder.monitorDecoder.decode([DiagnosticTimelineEntry].self, from: data) else {
+            return
+        }
+        diagnosticEvents = entries
+        pruneDiagnostics()
+    }
+
+    private func persistDiagnostics() {
+        guard capturesDiagnostics else {
+            try? FileManager.default.removeItem(at: diagnosticPersistenceURL)
+            return
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: diagnosticPersistenceURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            let data = try JSONEncoder.monitorEncoder.encode(diagnosticEvents)
+            try data.write(to: diagnosticPersistenceURL, options: [.atomic, .completeFileProtection])
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: diagnosticPersistenceURL.path
+            )
+        } catch {
+            // Diagnostics are intentionally best-effort and must never affect monitoring.
         }
     }
 

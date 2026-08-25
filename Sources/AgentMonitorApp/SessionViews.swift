@@ -126,6 +126,7 @@ struct MenuContentView: View {
 
     @ObservedObject var store: SessionStore
     let onOpenSettings: () -> Void
+    let onOpenDiagnostics: (String?) -> Void
     @AppStorage("menuBarDensity") private var densityRawValue = MenuBarDensity.standard.rawValue
     @AppStorage("showTerminalInMenuBar") private var showTerminalDetails = true
 
@@ -156,6 +157,12 @@ struct MenuContentView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
             .frame(height: Self.headerHeight)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if NSEvent.modifierFlags.contains(.option) {
+                    onOpenDiagnostics(nil)
+                }
+            }
             Divider().frame(height: 1)
 
             if store.visibleSessions.isEmpty {
@@ -177,7 +184,13 @@ struct MenuContentView: View {
                             compact: false,
                             menuBarDensity: density,
                             showTerminalDetails: showTerminalDetails
-                        ) { focus(session) }
+                        ) {
+                            if NSEvent.modifierFlags.contains(.option) {
+                                onOpenDiagnostics(session.id)
+                            } else {
+                                focus(session)
+                            }
+                        }
                         .contextMenu {
                             Button("Open terminal") { focus(session) }
                             Button("Copy working directory") {
@@ -263,6 +276,207 @@ struct MenuContentView: View {
         }
     }
 
+}
+
+@MainActor
+final class DiagnosticsWindowState: ObservableObject {
+    @Published var selectedSessionID: String?
+
+    init(selectedSessionID: String? = nil) {
+        self.selectedSessionID = selectedSessionID
+    }
+}
+
+struct DiagnosticTimelineView: View {
+    @ObservedObject var store: SessionStore
+    @ObservedObject var state: DiagnosticsWindowState
+
+    private var summaries: [DiagnosticSessionSummary] {
+        store.diagnosticSessionSummaries
+    }
+
+    var body: some View {
+        HSplitView {
+            List(selection: $state.selectedSessionID) {
+                ForEach(summaries) { summary in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(summary.displayName)
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(summary.provider.displayName)
+                            Text("·")
+                            Text("\(summary.eventCount) events")
+                            Text("·")
+                            Text(summary.updatedAt, style: .relative)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    }
+                    .padding(.vertical, 3)
+                    .tag(summary.id)
+                }
+            }
+            .frame(minWidth: 210, idealWidth: 240, maxWidth: 290)
+
+            timeline
+                .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 780, minHeight: 500)
+        .onAppear(perform: selectFirstSessionIfNeeded)
+        .onChange(of: summaries.map(\.id)) { _, _ in
+            selectFirstSessionIfNeeded()
+        }
+    }
+
+    @ViewBuilder
+    private var timeline: some View {
+        if let sessionID = state.selectedSessionID,
+           let summary = summaries.first(where: { $0.id == sessionID }) {
+            let entries = store.diagnosticEntries(for: sessionID)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(summary.displayName)
+                            .font(.title2.weight(.semibold))
+                        Text(sessionID)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    Spacer()
+                    Button("Copy JSON") { copyJSON(for: sessionID) }
+                    Button("Clear") { store.clearDiagnostics(for: sessionID) }
+                }
+                .padding(16)
+                Divider()
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(entries) { entry in
+                            DiagnosticTimelineRow(entry: entry)
+                            if entry.id != entries.last?.id { Divider() }
+                        }
+                    }
+                }
+            }
+        } else if summaries.isEmpty {
+            ContentUnavailableView(
+                "No diagnostic events",
+                systemImage: "waveform.path.ecg",
+                description: Text("Lifecycle events will appear here as agents run.")
+            )
+        } else {
+            ContentUnavailableView("Select a session", systemImage: "sidebar.left")
+        }
+    }
+
+    private func selectFirstSessionIfNeeded() {
+        guard !summaries.contains(where: { $0.id == state.selectedSessionID }) else { return }
+        state.selectedSessionID = summaries.first?.id
+    }
+
+    private func copyJSON(for sessionID: String) {
+        guard let json = store.diagnosticJSON(for: sessionID) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(json, forType: .string)
+    }
+}
+
+private struct DiagnosticTimelineRow: View {
+    let entry: DiagnosticTimelineEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Circle()
+                    .fill(outcomeColor)
+                    .frame(width: 8, height: 8)
+                Text(entry.event.eventType.rawValue)
+                    .font(.body.monospaced().weight(.medium))
+                Text(entry.outcome.label)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(outcomeColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(outcomeColor.opacity(0.12), in: Capsule())
+                Spacer()
+                Text(entry.receivedAt.formatted(.dateTime.hour().minute().second()))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 5) {
+                Text(statusTransition)
+                if let turnID = entry.event.turnId {
+                    Text("·")
+                    Text("turn \(turnID)")
+                }
+                if let toolName = entry.event.toolName {
+                    Text("·")
+                    Text("tool \(toolName)")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+
+            if entry.completionSignalEmitted {
+                HStack(spacing: 5) {
+                    Label("menu-bar completion", systemImage: "checkmark.circle")
+                    if entry.notificationTriggered {
+                        Text("·")
+                        Label("notification", systemImage: "bell")
+                    }
+                    if entry.speechTriggered {
+                        Text("·")
+                        Label("speech", systemImage: "speaker.wave.2")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.blue)
+            }
+
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 3) {
+                diagnosticField("event", entry.event.eventId)
+                diagnosticField("occurred", entry.event.occurredAt.formatted(.iso8601))
+                diagnosticField("cwd", entry.event.cwd)
+                diagnosticField("terminal", terminalDescription)
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(.tertiary)
+            .textSelection(.enabled)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private var statusTransition: String {
+        let previous = entry.previousStatus?.rawValue ?? "none"
+        let resulting = entry.resultingStatus?.rawValue ?? "none"
+        return "\(previous) → \(resulting) (reported \(entry.event.status.rawValue))"
+    }
+
+    private var terminalDescription: String {
+        var values = [entry.event.terminal.kind.rawValue]
+        if let bundleID = entry.event.terminal.bundleIdentifier { values.append(bundleID) }
+        if let pid = entry.event.terminal.agentPid { values.append("pid=\(pid)") }
+        if let tty = entry.event.terminal.tty { values.append(tty) }
+        return values.joined(separator: " · ")
+    }
+
+    private var outcomeColor: Color {
+        entry.outcome == .applied ? .green : .orange
+    }
+
+    private func diagnosticField(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label)
+                .frame(width: 58, alignment: .trailing)
+            Text(value)
+                .lineLimit(1)
+        }
+    }
 }
 
 private struct MenuVisualEffect: NSViewRepresentable {

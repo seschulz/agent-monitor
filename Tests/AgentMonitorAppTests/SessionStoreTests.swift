@@ -187,7 +187,7 @@ import AgentMonitorShared
 @MainActor
 @Test func ignoresDuplicatesAndOutOfOrderEvents() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(baseDirectory: directory, diagnosticsEnabled: true)
     let now = Date()
     let running = MonitorEvent(eventId: "new", eventType: .userPromptSubmit, occurredAt: now, sessionId: "s", turnId: "t", cwd: "/tmp/repo", status: .running, terminal: .init(kind: .unknown))
     store.apply(running)
@@ -196,6 +196,231 @@ import AgentMonitorShared
     let old = MonitorEvent(eventId: "old", eventType: .agentTurnComplete, occurredAt: now.addingTimeInterval(-1), sessionId: "s", turnId: "t", cwd: "/tmp/repo", status: .ready, terminal: .init(kind: .unknown))
     store.apply(old)
     #expect(store.sessions.first?.status == .running)
+    #expect(store.diagnosticEntries(for: "codex:s").map(\.outcome) == [
+        .ignoredOutOfOrder,
+        .ignoredDuplicate,
+        .applied
+    ])
+}
+
+@MainActor
+@Test func diagnosticTimelinePersistsRecentRawLifecycleEvents() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let now = Date()
+    let event = MonitorEvent(
+        eventId: "diagnostic-event",
+        eventType: .postToolUse,
+        occurredAt: now,
+        sessionId: "diagnostic-session",
+        turnId: "turn-1",
+        cwd: "/tmp/diagnostic-project",
+        status: .running,
+        terminal: .init(kind: .ghostty, agentPid: 42, tty: "/dev/ttys001"),
+        toolName: "shell"
+    )
+
+    SessionStore(baseDirectory: directory, diagnosticsEnabled: true).apply(event)
+    let reloaded = SessionStore(baseDirectory: directory, diagnosticsEnabled: true)
+    let entries = reloaded.diagnosticEntries(for: "codex:diagnostic-session")
+
+    #expect(entries.count == 1)
+    #expect(entries.first?.event.eventId == event.eventId)
+    #expect(entries.first?.event.eventType == event.eventType)
+    #expect(entries.first?.event.turnId == event.turnId)
+    #expect(entries.first?.event.toolName == event.toolName)
+    #expect(entries.first?.event.terminal == event.terminal)
+    #expect(entries.first?.outcome == .applied)
+    #expect(entries.first?.previousStatus == nil)
+    #expect(entries.first?.resultingStatus == .running)
+}
+
+@MainActor
+@Test func diagnosticTimelineIsBoundedPerSession() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = SessionStore(baseDirectory: directory, diagnosticsEnabled: true)
+    let now = Date()
+
+    for index in 0..<105 {
+        store.apply(.init(
+            eventId: "event-\(index)",
+            eventType: .postToolUse,
+            occurredAt: now.addingTimeInterval(TimeInterval(index)),
+            sessionId: "bounded",
+            turnId: "turn-1",
+            cwd: "/tmp/project",
+            status: .running,
+            terminal: .init(kind: .unknown),
+            toolName: "tool-\(index)"
+        ))
+    }
+
+    let entries = store.diagnosticEntries(for: "codex:bounded")
+    #expect(entries.count == 100)
+    #expect(entries.first?.event.eventId == "event-104")
+    #expect(entries.last?.event.eventId == "event-5")
+}
+
+@MainActor
+@Test func diagnosticTimelineRecordsCompletionSignalAndDisabledEffects() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let suiteName = "AgentMonitorTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: directory)
+    }
+    let store = SessionStore(baseDirectory: directory, defaults: defaults, diagnosticsEnabled: true)
+    let now = Date()
+    store.apply(.init(
+        eventType: .userPromptSubmit,
+        occurredAt: now,
+        sessionId: "effects",
+        cwd: "/tmp/project",
+        status: .running,
+        terminal: .init(kind: .unknown)
+    ))
+    store.apply(.init(
+        eventType: .agentTurnComplete,
+        occurredAt: now.addingTimeInterval(1),
+        sessionId: "effects",
+        cwd: "/tmp/project",
+        status: .ready,
+        terminal: .init(kind: .unknown)
+    ))
+
+    let completion = store.diagnosticEntries(for: "codex:effects").first
+    #expect(completion?.completionSignalEmitted == true)
+    #expect(completion?.notificationTriggered == false)
+    #expect(completion?.speechTriggered == false)
+}
+
+@MainActor
+@Test func diagnosticsRemainDisabledWithoutInternalOptIn() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = SessionStore(baseDirectory: directory, diagnosticsEnabled: false)
+    store.apply(.init(
+        eventType: .sessionStart,
+        sessionId: "private",
+        cwd: "/tmp/project",
+        status: .running,
+        terminal: .init(kind: .unknown)
+    ))
+
+    #expect(store.diagnosticEvents.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("diagnostics.json").path))
+}
+
+@MainActor
+@Test func codexDesktopWatcherEmitsStartAndCompletionFromTranscript() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let transcript = root.appendingPathComponent("rollout-desktop.jsonl")
+    let metadata = #"{"type":"session_meta","payload":{"id":"desktop-session","cwd":"/tmp/desktop-project","originator":"Codex Desktop","thread_source":"user"}}"#
+    let started = #"{"timestamp":"2026-08-25T17:00:00.123Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#
+    try "\(metadata)\n\(started)\n".write(to: transcript, atomically: true, encoding: .utf8)
+    let terminal = TerminalHost(kind: .unknown, bundleIdentifier: "com.openai.codex", hostPid: 123)
+    let watcher = CodexDesktopSessionWatcher(sessionsRoot: root)
+
+    let initial = await watcher.poll(terminal: terminal)
+    #expect(initial.count == 1)
+    #expect(initial.first?.eventType == .userPromptSubmit)
+    #expect(initial.first?.status == .running)
+    #expect(initial.first?.sessionId == "desktop-session")
+    #expect(initial.first?.turnId == "turn-1")
+    #expect(URL(fileURLWithPath: initial.first?.transcriptPath ?? "").resolvingSymlinksInPath()
+        == transcript.resolvingSymlinksInPath())
+    #expect(initial.first?.terminal == terminal)
+
+    let completed = #"{"timestamp":"2026-08-25T17:01:00.456Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#
+    let handle = try FileHandle(forWritingTo: transcript)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data("\(completed)\n".utf8))
+    try handle.close()
+
+    let update = await watcher.poll(
+        now: Date().addingTimeInterval(2),
+        changedURLs: [transcript],
+        terminal: terminal
+    )
+    #expect(update.count == 1)
+    #expect(update.first?.eventType == .agentTurnComplete)
+    #expect(update.first?.status == .ready)
+    #expect(update.first?.turnId == "turn-1")
+
+    let secondTurn = #"{"timestamp":"2026-08-25T17:02:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}"#
+    let aborted = #"{"timestamp":"2026-08-25T17:02:01.000Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-2"}}"#
+    let secondHandle = try FileHandle(forWritingTo: transcript)
+    try secondHandle.seekToEnd()
+    try secondHandle.write(contentsOf: Data("\(secondTurn)\n\(aborted)\n".utf8))
+    try secondHandle.close()
+
+    let interruption = await watcher.poll(
+        now: Date().addingTimeInterval(4),
+        changedURLs: [transcript],
+        terminal: terminal
+    )
+    #expect(interruption.map(\.eventType) == [.userPromptSubmit, .stop])
+    #expect(interruption.map(\.status) == [.running, .stale])
+}
+
+@MainActor
+@Test func codexDesktopWatcherIgnoresCLIAndCompletedHistory() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let cliTranscript = root.appendingPathComponent("rollout-cli.jsonl")
+    let desktopTranscript = root.appendingPathComponent("rollout-completed.jsonl")
+    let subagentTranscript = root.appendingPathComponent("rollout-subagent.jsonl")
+    try """
+    {"type":"session_meta","payload":{"id":"cli-session","cwd":"/tmp/cli","originator":"codex-tui","thread_source":"user"}}
+    {"timestamp":"2026-08-25T17:00:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-cli"}}
+    """.write(to: cliTranscript, atomically: true, encoding: .utf8)
+    try """
+    {"type":"session_meta","payload":{"id":"desktop-session","cwd":"/tmp/desktop","originator":"Codex Desktop","thread_source":"user"}}
+    {"timestamp":"2026-08-25T17:00:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-done"}}
+    {"timestamp":"2026-08-25T17:00:01.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-done"}}
+    """.write(to: desktopTranscript, atomically: true, encoding: .utf8)
+    try """
+    {"type":"session_meta","payload":{"id":"subagent-session","cwd":"/tmp/subagent","originator":"Codex Desktop","source":{"subagent":{} }}}
+    {"timestamp":"2026-08-25T17:00:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-subagent"}}
+    """.write(to: subagentTranscript, atomically: true, encoding: .utf8)
+
+    let watcher = CodexDesktopSessionWatcher(sessionsRoot: root)
+
+    #expect(await watcher.poll(terminal: TerminalHost(kind: .unknown)).isEmpty)
+}
+
+@MainActor
+@Test func codexDesktopWatcherCompletesAPartiallyWrittenLine() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let transcript = root.appendingPathComponent("rollout-partial.jsonl")
+    let metadata = #"{"type":"session_meta","payload":{"id":"partial-session","cwd":"/tmp/project","originator":"Codex Desktop","thread_source":"user"}}"#
+    let partial = #"{"timestamp":"2026-08-25T17:00:00.000Z","type":"event_msg","payload":{"type":"task_sta"#
+    try "\(metadata)\n\(partial)".write(to: transcript, atomically: true, encoding: .utf8)
+    let watcher = CodexDesktopSessionWatcher(sessionsRoot: root)
+    let terminal = TerminalHost(kind: .unknown)
+
+    #expect(await watcher.poll(terminal: terminal).isEmpty)
+
+    let handle = try FileHandle(forWritingTo: transcript)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(#"rted","turn_id":"turn-partial"}}"#.appending("\n").utf8))
+    try handle.close()
+
+    let events = await watcher.poll(
+        now: Date().addingTimeInterval(1),
+        changedURLs: [transcript],
+        terminal: terminal
+    )
+    #expect(events.count == 1)
+    #expect(events.first?.turnId == "turn-partial")
+    #expect(events.first?.status == .running)
 }
 
 @MainActor
