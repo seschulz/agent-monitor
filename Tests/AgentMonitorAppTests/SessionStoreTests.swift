@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import AgentMonitorShared
@@ -76,10 +77,35 @@ import AgentMonitorShared
     #expect(SessionRow.elapsedTime(from: start, to: start.addingTimeInterval(3_723)) == "1:02:03")
 }
 
+@MainActor
+@Test func overlayPositionMovesBackFromDisconnectedDisplay() {
+    let corrected = OverlayController.reachableTopLeft(
+        NSPoint(x: 2_264, y: 444),
+        windowSize: NSSize(width: 320, height: 160),
+        visibleFrames: [NSRect(x: 0, y: 0, width: 1_440, height: 900)],
+        preferredVisibleFrame: NSRect(x: 0, y: 0, width: 1_440, height: 900)
+    )
+
+    #expect(corrected == NSPoint(x: 1_100, y: 444))
+}
+
+@MainActor
+@Test func overlayPositionRemainsWhereItIsReachable() {
+    let saved = NSPoint(x: 900, y: 700)
+    let corrected = OverlayController.reachableTopLeft(
+        saved,
+        windowSize: NSSize(width: 320, height: 160),
+        visibleFrames: [NSRect(x: 0, y: 0, width: 1_440, height: 900)],
+        preferredVisibleFrame: NSRect(x: 0, y: 0, width: 1_440, height: 900)
+    )
+
+    #expect(corrected == saved)
+}
+
 @Test func minimalOverlayTimeFormatting() {
     let start = Date(timeIntervalSince1970: 1_000)
     let ready = MonitorEvent(
-        eventType: .stop,
+        eventType: .agentTurnComplete,
         occurredAt: start,
         sessionId: "ready",
         cwd: "/tmp/repo",
@@ -137,7 +163,8 @@ import AgentMonitorShared
         terminal: .init(kind: .unknown)
     )
 
-    #expect(SessionStore.shouldSpeakCompletion(for: stop, previousStatus: .ready))
+    #expect(SessionStore.shouldSpeakCompletion(for: stop, previousStatus: .running))
+    #expect(!SessionStore.shouldSpeakCompletion(for: stop, previousStatus: .ready))
     #expect(!SessionStore.shouldSpeakCompletion(for: sessionEnd, previousStatus: .running))
 }
 
@@ -152,7 +179,9 @@ import AgentMonitorShared
     )
 
     #expect(SessionStore.shouldSpeakCompletion(for: completion, previousStatus: .running))
+    #expect(SessionStore.shouldSpeakCompletion(for: completion, previousStatus: .stale))
     #expect(!SessionStore.shouldSpeakCompletion(for: completion, previousStatus: .ready))
+    #expect(!SessionStore.shouldSpeakCompletion(for: completion, previousStatus: nil))
 }
 
 @MainActor
@@ -215,6 +244,131 @@ import AgentMonitorShared
 
     #expect(completions == 1)
     #expect(store.sessions.first?.updatedAt == now.addingTimeInterval(1))
+}
+
+@MainActor
+@Test func codexStopHidesInterruptedSessionWithoutCompleting() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = SessionStore(baseDirectory: directory)
+    var completions = 0
+    store.onCompletion = { completions += 1 }
+    let now = Date()
+
+    store.apply(.init(provider: .codex, eventType: .userPromptSubmit, occurredAt: now, sessionId: "s", turnId: "one", cwd: "/tmp/repo", status: .running, terminal: .init(kind: .unknown)))
+    store.apply(.init(provider: .codex, eventType: .stop, occurredAt: now.addingTimeInterval(1), sessionId: "s", turnId: "one", cwd: "/tmp/repo", status: .stale, terminal: .init(kind: .unknown)))
+
+    #expect(store.sessions.first?.status == .stale)
+    #expect(store.sessions.first?.completedAt == nil)
+    #expect(store.visibleSessions.isEmpty)
+    #expect(completions == 0)
+    #expect(!SessionStore.shouldSpeakCompletion(
+        for: .init(provider: .codex, eventType: .stop, sessionId: "s", cwd: "/tmp/repo", status: .ready, terminal: .init(kind: .unknown)),
+        previousStatus: .running
+    ))
+}
+
+@MainActor
+@Test func deadAgentProcessBecomesInactive() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = SessionStore(baseDirectory: directory)
+    store.apply(.init(
+        eventType: .userPromptSubmit,
+        sessionId: "dead-process",
+        cwd: "/tmp/repo",
+        status: .running,
+        terminal: .init(kind: .terminalApp, agentPid: .max)
+    ))
+
+    store.reconcileProcesses()
+
+    #expect(store.sessions.first?.status == .stale)
+    #expect(store.visibleSessions.isEmpty)
+}
+
+@MainActor
+@Test func completedSessionSurvivesItsWorkerProcessExit() {
+    let suite = "AgentMonitorTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.set(true, forKey: "showReadyInOverlay")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let now = Date()
+    let terminal = TerminalHost(kind: .terminalApp, agentPid: .max)
+    store.apply(.init(eventType: .userPromptSubmit, occurredAt: now, sessionId: "completed", turnId: "turn-1", cwd: "/tmp/repo", status: .running, terminal: terminal))
+    store.apply(.init(eventType: .agentTurnComplete, occurredAt: now.addingTimeInterval(1), sessionId: "completed", turnId: "turn-1", cwd: "/tmp/repo", status: .ready, terminal: terminal))
+
+    store.reconcileProcesses()
+
+    #expect(store.sessions.first?.status == .ready)
+    #expect(store.overlaySessions(at: now.addingTimeInterval(2)).count == 1)
+}
+
+@MainActor
+@Test func suspendedAgentProcessBecomesInactive() throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    process.arguments = ["30"]
+    try process.run()
+    defer {
+        kill(process.processIdentifier, SIGKILL)
+        process.waitUntilExit()
+    }
+    kill(process.processIdentifier, SIGSTOP)
+    for _ in 0..<50 where !SessionStore.agentProcessIsInactive(process.processIdentifier) {
+        usleep(10_000)
+    }
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = SessionStore(baseDirectory: directory)
+    store.apply(.init(
+        eventType: .userPromptSubmit,
+        sessionId: "suspended-process",
+        cwd: "/tmp/repo",
+        status: .running,
+        terminal: .init(kind: .terminalApp, agentPid: process.processIdentifier)
+    ))
+    store.reconcileProcesses()
+
+    #expect(store.sessions.first?.status == .stale)
+    #expect(store.visibleSessions.isEmpty)
+}
+
+@MainActor
+@Test func interruptedCodexTranscriptBecomesInactive() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let transcript = directory.appendingPathComponent("rollout.jsonl")
+    try #"{"timestamp":"2026-08-25T16:44:38Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted"}}"#
+        .write(to: transcript, atomically: true, encoding: .utf8)
+    let store = SessionStore(baseDirectory: directory)
+    store.apply(.init(
+        eventType: .userPromptSubmit,
+        sessionId: "interrupted",
+        turnId: "turn-1",
+        cwd: "/tmp/repo",
+        transcriptPath: transcript.path,
+        status: .running,
+        terminal: .init(kind: .terminalApp)
+    ))
+
+    store.reconcileProcesses()
+
+    #expect(store.sessions.first?.status == .stale)
+    #expect(store.visibleSessions.isEmpty)
+}
+
+@MainActor
+@Test func lateToolEventCannotReactivateInactiveSession() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = SessionStore(baseDirectory: directory)
+    let now = Date()
+    store.apply(.init(eventType: .userPromptSubmit, occurredAt: now, sessionId: "s", turnId: "root-turn", cwd: "/tmp/repo", status: .running, terminal: .init(kind: .unknown)))
+    store.apply(.init(eventType: .stop, occurredAt: now.addingTimeInterval(1), sessionId: "s", turnId: "root-turn", cwd: "/tmp/repo", status: .stale, terminal: .init(kind: .unknown)))
+    store.apply(.init(eventType: .postToolUse, occurredAt: now.addingTimeInterval(2), sessionId: "s", turnId: "subagent-turn", cwd: "/tmp/repo", status: .running, terminal: .init(kind: .unknown)))
+
+    #expect(store.sessions.first?.status == .stale)
+    #expect(store.sessions.first?.currentTurnId == "root-turn")
 }
 
 @MainActor
@@ -312,7 +466,7 @@ import AgentMonitorShared
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let store = SessionStore(baseDirectory: directory, defaults: defaults)
     let now = Date()
-    store.apply(.init(eventType: .stop, occurredAt: now, sessionId: "done", turnId: "turn-1", cwd: "/tmp/done", status: .ready, terminal: .init(kind: .unknown)))
+    store.apply(.init(eventType: .agentTurnComplete, occurredAt: now, sessionId: "done", turnId: "turn-1", cwd: "/tmp/done", status: .ready, terminal: .init(kind: .unknown)))
     store.dismiss("codex:done", at: now.addingTimeInterval(1))
 
     store.apply(.init(eventType: .agentTurnComplete, occurredAt: now.addingTimeInterval(120), sessionId: "done", turnId: "turn-1", cwd: "/tmp/done", status: .ready, terminal: .init(kind: .unknown)))
@@ -330,7 +484,7 @@ import AgentMonitorShared
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let now = Date()
     let store = SessionStore(baseDirectory: directory, defaults: defaults)
-    store.apply(.init(eventType: .stop, occurredAt: now, sessionId: "session", turnId: "turn-1", cwd: "/tmp/repo", status: .ready, terminal: .init(kind: .unknown)))
+    store.apply(.init(eventType: .agentTurnComplete, occurredAt: now, sessionId: "session", turnId: "turn-1", cwd: "/tmp/repo", status: .ready, terminal: .init(kind: .unknown)))
     store.dismiss("codex:session", at: now.addingTimeInterval(1))
 
     store.apply(.init(eventType: .userPromptSubmit, occurredAt: now.addingTimeInterval(2), sessionId: "session", turnId: "turn-2", cwd: "/tmp/repo", status: .running, terminal: .init(kind: .unknown)))
@@ -348,7 +502,7 @@ import AgentMonitorShared
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let now = Date()
     let initialStore = SessionStore(baseDirectory: directory, defaults: defaults)
-    initialStore.apply(.init(eventType: .stop, occurredAt: now, sessionId: "done", cwd: "/tmp/done", status: .ready, terminal: .init(kind: .unknown)))
+    initialStore.apply(.init(eventType: .agentTurnComplete, occurredAt: now, sessionId: "done", cwd: "/tmp/done", status: .ready, terminal: .init(kind: .unknown)))
     initialStore.dismiss("codex:done", at: now)
 
     let reloadedStore = SessionStore(baseDirectory: directory, defaults: defaults)

@@ -5,6 +5,7 @@ enum HookInputDecoder {
     private struct HookPayload: Decodable {
         var sessionId: String
         var cwd: String
+        var transcriptPath: String?
         var hookEventName: String
         var turnId: String?
         var toolName: String?
@@ -12,6 +13,7 @@ enum HookInputDecoder {
         enum CodingKeys: String, CodingKey {
             case sessionId = "session_id"
             case cwd
+            case transcriptPath = "transcript_path"
             case hookEventName = "hook_event_name"
             case turnId = "turn_id"
             case toolName = "tool_name"
@@ -39,7 +41,7 @@ enum HookInputDecoder {
         case "sessionstart": mapping = (.sessionStart, .ready)
         case "userpromptsubmit": mapping = (.userPromptSubmit, .running)
         case "posttooluse": mapping = (.postToolUse, .running)
-        case "stop": mapping = (.stop, .ready)
+        case "stop": mapping = (.stop, .stale)
         case "sessionend": mapping = (.sessionEnd, .closed)
         default: throw DecodeError.unsupportedEvent(payload.hookEventName)
         }
@@ -49,6 +51,7 @@ enum HookInputDecoder {
             sessionId: payload.sessionId,
             turnId: payload.turnId,
             cwd: payload.cwd,
+            transcriptPath: payload.transcriptPath,
             status: mapping.1,
             terminal: terminal,
             toolName: payload.toolName,
@@ -87,6 +90,7 @@ enum HookInputDecoder {
             sessionId: payload.sessionId,
             turnId: payload.turnId,
             cwd: payload.cwd,
+            transcriptPath: payload.transcriptPath,
             status: mapping.1,
             terminal: terminal,
             toolName: payload.toolName,
@@ -99,5 +103,36 @@ enum HookInputDecoder {
         var errorDescription: String? {
             switch self { case let .unsupportedEvent(name): "Unsupported agent event: \(name)" }
         }
+    }
+}
+
+enum CodexSessionInspector {
+    static func isSubagent(threadID: String, sessionsRoot: URL? = nil) -> Bool {
+        guard threadID.allSatisfy({ $0.isHexDigit || $0 == "-" }) else { return false }
+        let root = sessionsRoot ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return false }
+        let suffix = "-\(threadID).jsonl"
+        for case let url as URL in enumerator where url.lastPathComponent.hasSuffix(suffix) {
+            guard let handle = FileHandle(forReadingAtPath: url.path) else { return false }
+            defer { try? handle.close() }
+            guard let data = try? handle.read(upToCount: 256 * 1024),
+                  let text = String(data: data, encoding: .utf8) else { return false }
+            for line in text.split(separator: "\n").prefix(8) {
+                guard let lineData = line.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      object["type"] as? String == "session_meta",
+                      let payload = object["payload"] as? [String: Any],
+                      payload["id"] as? String == threadID else { continue }
+                if payload["thread_source"] as? String == "subagent" { return true }
+                return (payload["source"] as? [String: Any])?["subagent"] != nil
+            }
+            return false
+        }
+        return false
     }
 }

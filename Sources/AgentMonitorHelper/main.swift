@@ -36,10 +36,13 @@ do {
         print("Terminal: \(host.kind.rawValue) \(host.tty ?? "no TTY")")
     case "codex-hook":
         let input = FileHandle.standardInput.readDataToEndOfFile()
-        deliver(try HookInputDecoder.decodeCodexHook(input, terminal: HostDetector.detect(provider: .codex)))
+        let event = try HookInputDecoder.decodeCodexHook(input, terminal: HostDetector.detect(provider: .codex))
+        deliver(event)
+        if event.eventType == .stop { print("{}") }
     case "codex-notify":
         guard arguments.count >= 3 else { throw CLIError.missingNotification }
-        deliver(try HookInputDecoder.decodeCodexNotification(Data(arguments[2].utf8), terminal: HostDetector.detect(provider: .codex)))
+        let event = try HookInputDecoder.decodeCodexNotification(Data(arguments[2].utf8), terminal: HostDetector.detect(provider: .codex))
+        if !CodexSessionInspector.isSubagent(threadID: event.sessionId) { deliver(event) }
     case "claude-hook":
         let input = FileHandle.standardInput.readDataToEndOfFile()
         deliver(try HookInputDecoder.decodeClaudeHook(input, terminal: HostDetector.detect(provider: .claude)))

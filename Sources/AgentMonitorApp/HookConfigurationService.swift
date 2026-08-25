@@ -16,7 +16,8 @@ struct HookConfigurationPaths {
 }
 
 enum HookConfigurationService {
-    static let events = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
+    static let codexEvents = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
+    static let claudeEvents = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
     static let markerBegin = "# BEGIN Agent Monitor"
     static let markerEnd = "# END Agent Monitor"
 
@@ -28,9 +29,9 @@ enum HookConfigurationService {
     }
 
     static func install(helperURL: URL, paths: HookConfigurationPaths = .userDefaults) throws {
-        try installJSONHooks(at: paths.codexHooks, helperURL: helperURL, subcommand: "codex-hook", addDescription: true)
+        try installJSONHooks(at: paths.codexHooks, helperURL: helperURL, events: codexEvents, subcommand: "codex-hook", addDescription: true)
         try installCodexNotify(at: paths.codexConfig, helperURL: helperURL)
-        try installJSONHooks(at: paths.claudeSettings, helperURL: helperURL, subcommand: "claude-hook", addDescription: false)
+        try installJSONHooks(at: paths.claudeSettings, helperURL: helperURL, events: claudeEvents, subcommand: "claude-hook", addDescription: false)
     }
 
     static func remove(paths: HookConfigurationPaths = .userDefaults) throws {
@@ -39,7 +40,7 @@ enum HookConfigurationService {
         try removeCodexNotify(at: paths.codexConfig)
     }
 
-    private static func installJSONHooks(at url: URL, helperURL: URL, subcommand: String, addDescription: Bool) throws {
+    private static func installJSONHooks(at url: URL, helperURL: URL, events: [String], subcommand: String, addDescription: Bool) throws {
         var document = try readJSONObject(at: url)
         var hooks = document["hooks"] as? [String: Any] ?? [:]
         removeMonitorEntries(from: &hooks)
@@ -50,7 +51,6 @@ enum HookConfigurationService {
                 "command": "\(shellQuote(helperURL.path)) \(subcommand)",
                 "timeout": 3
             ]
-            if event != "SessionEnd" { command["async"] = true }
             entries.append(["matcher": "", "hooks": [command]])
             hooks[event] = entries
         }

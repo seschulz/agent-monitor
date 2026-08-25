@@ -76,6 +76,7 @@ public struct MonitorEvent: Codable, Equatable, Sendable {
     public var sessionId: String
     public var turnId: String?
     public var cwd: String
+    public var transcriptPath: String?
     public var status: SessionStatus
     public var terminal: TerminalHost
     public var toolName: String?
@@ -90,6 +91,7 @@ public struct MonitorEvent: Codable, Equatable, Sendable {
         sessionId: String,
         turnId: String? = nil,
         cwd: String,
+        transcriptPath: String? = nil,
         status: SessionStatus,
         terminal: TerminalHost,
         toolName: String? = nil,
@@ -103,6 +105,7 @@ public struct MonitorEvent: Codable, Equatable, Sendable {
         self.sessionId = sessionId
         self.turnId = turnId
         self.cwd = cwd
+        self.transcriptPath = transcriptPath
         self.status = status
         self.terminal = terminal
         self.toolName = toolName
@@ -115,6 +118,7 @@ public struct MonitorEvent: Codable, Equatable, Sendable {
         guard !sessionId.isEmpty, sessionId.count <= 512 else { throw MonitorEventError.invalidSessionID }
         guard !cwd.isEmpty, cwd.count <= 4096 else { throw MonitorEventError.invalidWorkingDirectory }
         guard turnId?.count ?? 0 <= 512,
+              transcriptPath?.count ?? 0 <= 4096,
               terminal.tty?.count ?? 0 <= 1024,
               terminal.bundleIdentifier?.count ?? 0 <= 512,
               attentionReason?.count ?? 0 <= 1024 else {
@@ -149,6 +153,7 @@ public struct SessionRecord: Identifiable, Codable, Equatable, Sendable {
     public var currentTurnId: String?
     public var status: SessionStatus
     public var cwd: String
+    public var transcriptPath: String?
     public var displayName: String
     public var terminal: TerminalHost
     public var startedAt: Date
@@ -163,6 +168,7 @@ public struct SessionRecord: Identifiable, Codable, Equatable, Sendable {
         currentTurnId = event.turnId
         status = event.status
         cwd = event.cwd
+        transcriptPath = event.transcriptPath
         displayName = URL(fileURLWithPath: event.cwd).lastPathComponent.isEmpty
             ? "\(event.provider.displayName) session"
             : URL(fileURLWithPath: event.cwd).lastPathComponent

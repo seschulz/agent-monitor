@@ -38,11 +38,19 @@ final class OverlayController: NSObject, NSWindowDelegate {
             savedTopLeft = topLeft
             panel.setFrameTopLeftPoint(topLeft)
         }
+        ensureOnScreen()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screenParametersDidChange),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
     }
 
     func updateVisibility(hasSessions: Bool) {
         updateDensity()
         if hasSessions {
+            ensureOnScreen()
             if !panel.isVisible, let savedTopLeft {
                 panel.setFrameTopLeftPoint(savedTopLeft)
             }
@@ -58,11 +66,69 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
         panel.setContentSize(NSSize(width: width, height: panel.contentRect(forFrameRect: panel.frame).height))
         panel.setFrameTopLeftPoint(panel.isVisible ? topLeft : (savedTopLeft ?? topLeft))
+        ensureOnScreen()
     }
 
     func close() {
         savePositionWorkItem?.cancel()
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
         panel.close()
+    }
+
+    @objc private func screenParametersDidChange() {
+        ensureOnScreen()
+    }
+
+    private func ensureOnScreen() {
+        let topLeft = savedTopLeft ?? NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        let visibleFrames = NSScreen.screens.map(\.visibleFrame)
+        let corrected = Self.reachableTopLeft(
+            topLeft,
+            windowSize: panel.frame.size,
+            visibleFrames: visibleFrames,
+            preferredVisibleFrame: NSScreen.main?.visibleFrame
+        )
+        guard corrected != topLeft else { return }
+
+        savePositionWorkItem?.cancel()
+        userMoveInProgress = false
+        savedTopLeft = corrected
+        panel.setFrameTopLeftPoint(corrected)
+        UserDefaults.standard.set(NSStringFromPoint(corrected), forKey: Self.topLeftDefaultsKey)
+    }
+
+    static func reachableTopLeft(
+        _ topLeft: NSPoint,
+        windowSize: NSSize,
+        visibleFrames: [NSRect],
+        preferredVisibleFrame: NSRect?
+    ) -> NSPoint {
+        guard !visibleFrames.isEmpty else { return topLeft }
+        let windowFrame = NSRect(
+            x: topLeft.x,
+            y: topLeft.y - windowSize.height,
+            width: windowSize.width,
+            height: windowSize.height
+        )
+        let minimumVisibleWidth = min(48, max(windowSize.width * 0.2, 1))
+        let minimumVisibleHeight = min(32, max(windowSize.height * 0.2, 1))
+        if visibleFrames.contains(where: {
+            let intersection = $0.intersection(windowFrame)
+            return intersection.width >= minimumVisibleWidth && intersection.height >= minimumVisibleHeight
+        }) {
+            return topLeft
+        }
+
+        let target = preferredVisibleFrame ?? visibleFrames[0]
+        let margin: CGFloat = 20
+        let minimumX = target.minX + margin
+        let maximumX = max(minimumX, target.maxX - windowSize.width - margin)
+        let minimumY = target.minY + windowSize.height + margin
+        let maximumY = max(minimumY, target.maxY - margin)
+        return NSPoint(
+            x: min(max(topLeft.x, minimumX), maximumX),
+            y: min(max(topLeft.y, minimumY), maximumY)
+        )
     }
 
     func windowWillMove(_ notification: Notification) {

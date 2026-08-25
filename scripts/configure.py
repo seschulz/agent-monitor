@@ -35,8 +35,6 @@ def backup(path: Path) -> None:
 def hook_entry(helper: Path, event: str, subcommand: str) -> dict:
     command = f'"{helper}" {subcommand}'
     hook = {"type": "command", "command": command, "timeout": 3}
-    if event != "SessionEnd":
-        hook["async"] = True
     return {"matcher": "", "hooks": [hook]}
 
 

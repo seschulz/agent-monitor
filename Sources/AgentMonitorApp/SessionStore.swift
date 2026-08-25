@@ -59,7 +59,20 @@ final class SessionStore: ObservableObject {
         if seenEventIDs.count > 10_000 { seenEventIDs.removeAll(keepingCapacity: true) }
 
         let sessionID = event.scopedSessionID
-        if (event.eventType == .stop || event.eventType == .agentTurnComplete),
+        if event.eventType == .postToolUse,
+           sessions.first(where: { $0.id == sessionID })?.status == .stale {
+            return
+        }
+        // Codex Stop means the turn is no longer active, including when the
+        // user interrupts it. A final notify remains authoritative if it has
+        // already arrived for this turn.
+        if event.provider == .codex, event.eventType == .stop,
+           let existing = sessions.first(where: { $0.id == sessionID }),
+           existing.completedAt != nil,
+           event.turnId == nil || event.turnId == existing.currentTurnId {
+            return
+        }
+        if Self.isCompletion(event),
            let existing = sessions.first(where: { $0.id == sessionID }),
            existing.completedAt != nil,
            event.turnId == nil || event.turnId == existing.currentTurnId {
@@ -68,15 +81,23 @@ final class SessionStore: ObservableObject {
         let previousStatus = sessions.first(where: { $0.id == sessionID })?.status
         if let index = sessions.firstIndex(where: { $0.id == sessionID }) {
             guard event.occurredAt >= sessions[index].updatedAt else { return }
-            let isNewTurn = event.turnId != nil && event.turnId != sessions[index].currentTurnId
+            let advancesTurn = event.eventType == .userPromptSubmit
+                || event.eventType == .agentTurnComplete
+                || event.eventType == .stop
+            let isNewTurn = advancesTurn && event.turnId != nil && event.turnId != sessions[index].currentTurnId
             if event.eventType == .userPromptSubmit {
                 sessions[index].dismissedAt = nil
                 sessions[index].completedAt = nil
             }
-            sessions[index].currentTurnId = event.turnId ?? sessions[index].currentTurnId
+            if advancesTurn {
+                sessions[index].currentTurnId = event.turnId ?? sessions[index].currentTurnId
+            }
             sessions[index].status = event.status
             sessions[index].provider = event.provider
             sessions[index].cwd = event.cwd
+            if event.eventType == .sessionStart || event.eventType == .userPromptSubmit {
+                sessions[index].transcriptPath = event.transcriptPath ?? sessions[index].transcriptPath
+            }
             sessions[index].displayName = displayName(for: event.cwd)
             sessions[index].terminal = event.terminal
             sessions[index].updatedAt = event.occurredAt
@@ -92,7 +113,7 @@ final class SessionStore: ObservableObject {
         prune()
         persist()
         let isDismissed = sessions.first(where: { $0.id == sessionID })?.dismissedAt != nil
-        if !isDismissed && (event.eventType == .agentTurnComplete || event.eventType == .stop) && previousStatus != .ready {
+        if !isDismissed && Self.shouldSpeakCompletion(for: event, previousStatus: previousStatus) {
             onCompletion?()
             notify(title: displayName(for: event.cwd), body: "\(event.provider.displayName) is ready")
         }
@@ -103,10 +124,13 @@ final class SessionStore: ObservableObject {
     }
 
     nonisolated static func shouldSpeakCompletion(for event: MonitorEvent, previousStatus: SessionStatus?) -> Bool {
-        if event.provider == .claude {
-            return event.eventType == .stop
-        }
-        return (event.eventType == .stop || event.eventType == .agentTurnComplete) && previousStatus != .ready
+        isCompletion(event) && (previousStatus == .running || previousStatus == .stale)
+    }
+
+    nonisolated static func isCompletion(_ event: MonitorEvent) -> Bool {
+        event.provider == .claude
+            ? event.eventType == .stop
+            : event.eventType == .agentTurnComplete
     }
 
     func dismiss(_ id: String, at date: Date = Date()) {
@@ -133,15 +157,58 @@ final class SessionStore: ObservableObject {
     func reconcileProcesses() {
         let now = Date()
         displayDate = now
-        for index in sessions.indices where sessions[index].status != .closed && sessions[index].status != .stale {
-            guard let pid = sessions[index].terminal.agentPid, pid > 0 else { continue }
-            if kill(pid, 0) != 0 && errno == ESRCH {
+        var changed = false
+        for index in sessions.indices where sessions[index].status == .running {
+            if sessions[index].provider == .codex,
+               Self.transcriptShowsInterruption(sessions[index]) {
                 sessions[index].status = .stale
                 sessions[index].updatedAt = now
+                changed = true
+                continue
+            }
+            guard let pid = sessions[index].terminal.agentPid, pid > 0 else { continue }
+            if Self.agentProcessIsInactive(pid) {
+                sessions[index].status = .stale
+                sessions[index].updatedAt = now
+                changed = true
             }
         }
         prune()
-        persist()
+        if changed { persist() }
+    }
+
+    nonisolated static func agentProcessIsInactive(_ pid: Int32) -> Bool {
+        if kill(pid, 0) != 0 { return errno == ESRCH }
+        var info = proc_bsdinfo()
+        let size = MemoryLayout<proc_bsdinfo>.stride
+        let count = withUnsafeMutablePointer(to: &info) { pointer in
+            proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, pointer, Int32(size))
+        }
+        guard count == size else { return false }
+        return info.pbi_status == UInt32(SSTOP) || info.pbi_status == UInt32(SZOMB)
+    }
+
+    nonisolated private static func transcriptShowsInterruption(_ session: SessionRecord) -> Bool {
+        guard let path = session.transcriptPath,
+              let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        do {
+            let length = try handle.seekToEnd()
+            try handle.seek(toOffset: length > 128 * 1024 ? length - 128 * 1024 : 0)
+            let data = try handle.readToEnd() ?? Data()
+            guard let text = String(data: data, encoding: .utf8) else { return false }
+            for line in text.split(separator: "\n").reversed() {
+                guard let lineData = line.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else { continue }
+                let payload = object["payload"] as? [String: Any] ?? object
+                guard payload["type"] as? String == "turn_aborted" else { continue }
+                let turnID = payload["turn_id"] as? String
+                return session.currentTurnId == nil || turnID == session.currentTurnId
+            }
+        } catch {
+            return false
+        }
+        return false
     }
 
     func refreshDisplay() {

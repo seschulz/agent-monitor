@@ -44,7 +44,7 @@ final class MonitorRuntime: ObservableObject {
         } catch {
             store.showMessage(error.localizedDescription)
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.store.reconcileProcesses()
                 self?.refreshOverlay()
