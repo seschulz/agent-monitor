@@ -117,6 +117,18 @@ import AgentMonitorShared
     #expect(SessionRow.minimalTime(for: session, at: start.addingTimeInterval(42)) == "42s")
     #expect(SessionRow.minimalTime(for: session, at: start.addingTimeInterval(125)) == "2m")
     #expect(SessionRow.minimalTime(for: session, at: start.addingTimeInterval(7_200)) == "2h")
+
+    let running = SessionRecord(event: .init(
+        eventType: .userPromptSubmit,
+        occurredAt: start,
+        sessionId: "running",
+        cwd: "/tmp/repo",
+        status: .running,
+        terminal: .init(kind: .unknown)
+    ))
+    #expect(SessionRow.minimalTime(for: running, at: start.addingTimeInterval(42)) == "42s")
+    #expect(SessionRow.minimalTime(for: running, at: start.addingTimeInterval(754)) == "12m")
+    #expect(SessionRow.minimalTime(for: running, at: start.addingTimeInterval(58_119)) == "16h")
 }
 
 @Test func overlayDensityOffersFourIncreasingSizes() {
@@ -182,6 +194,30 @@ import AgentMonitorShared
     #expect(SessionStore.shouldSpeakCompletion(for: completion, previousStatus: .stale))
     #expect(!SessionStore.shouldSpeakCompletion(for: completion, previousStatus: .ready))
     #expect(!SessionStore.shouldSpeakCompletion(for: completion, previousStatus: nil))
+}
+
+@Test func completionSpeechTemplateExpandsSessionPlaceholders() {
+    let phrase = CompletionSpeechTemplate.render(
+        "{agent} finished {project} in {terminal} at {directory}",
+        agent: "Claude",
+        project: "agent-monitor",
+        terminal: "Ghostty",
+        directory: "/tmp/agent-monitor"
+    )
+
+    #expect(phrase == "Claude finished agent-monitor in Ghostty at /tmp/agent-monitor")
+}
+
+@Test func blankCompletionSpeechTemplateUsesDefaultMessage() {
+    let phrase = CompletionSpeechTemplate.render(
+        "   ",
+        agent: "Codex",
+        project: "agent-monitor",
+        terminal: "Terminal",
+        directory: "/tmp/agent-monitor"
+    )
+
+    #expect(phrase == "Codex finished")
 }
 
 @MainActor

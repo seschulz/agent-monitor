@@ -32,7 +32,8 @@ final class MonitorRuntime: ObservableObject {
             "readyRetentionMinutes": 15,
             "speechEnabled": false,
             "speakOnCompletion": true,
-            "speechVoice": SpeechService.systemDefaultVoice
+            "speechVoice": SpeechService.systemDefaultVoice,
+            "speechCompletionTemplate": CompletionSpeechTemplate.defaultValue
         ])
         store.reconcileProcesses()
         startDesktopSessionMonitoring()

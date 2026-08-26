@@ -219,7 +219,7 @@ final class SessionStore: ObservableObject {
             notify(title: displayName(for: event.cwd), body: "\(event.provider.displayName) is ready")
         }
         if emitsCompletionSignal {
-            speak("\(event.provider.displayName) finished", enabledBy: "speakOnCompletion")
+            speakCompletion(for: event)
         }
     }
 
@@ -494,9 +494,40 @@ final class SessionStore: ObservableObject {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
-    private func speak(_ phrase: String, enabledBy eventSetting: String) {
-        guard defaults.bool(forKey: "speechEnabled"), defaults.bool(forKey: eventSetting) else { return }
+    private func speakCompletion(for event: MonitorEvent) {
+        guard defaults.bool(forKey: "speechEnabled"), defaults.bool(forKey: "speakOnCompletion") else { return }
+        let phrase = CompletionSpeechTemplate.render(
+            defaults.string(forKey: "speechCompletionTemplate") ?? CompletionSpeechTemplate.defaultValue,
+            agent: event.provider.displayName,
+            project: displayName(for: event.cwd),
+            terminal: event.terminal.displayName,
+            directory: event.cwd
+        )
         SpeechService.speak(phrase, voice: defaults.string(forKey: "speechVoice"))
+    }
+}
+
+enum CompletionSpeechTemplate {
+    static let defaultValue = "{agent} finished"
+
+    static func render(
+        _ template: String,
+        agent: String,
+        project: String,
+        terminal: String,
+        directory: String
+    ) -> String {
+        let value = template.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = value.isEmpty ? defaultValue : value
+        let replacements = [
+            "{agent}": agent,
+            "{project}": project,
+            "{terminal}": terminal,
+            "{directory}": directory
+        ]
+        return replacements.reduce(source) { result, replacement in
+            result.replacingOccurrences(of: replacement.key, with: replacement.value)
+        }
     }
 }
 

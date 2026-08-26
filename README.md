@@ -57,7 +57,8 @@ The menu-bar icon opens the session list. A rotating blue symbol means a session
 - Use the X beside a completed session to dismiss it.
 - Use **Clear All** when several completed sessions are visible.
 - Drag the floating overlay to place it elsewhere on the desktop.
-- Open **Settings** from the menu for launch-at-login, menu density, overlay behavior, retention times, notifications, and spoken alerts.
+- Open **Settings** from the menu for launch-at-login, menu density, overlay behavior, retention times, macOS alerts, and finished voice alerts. The spoken completion message can use `{agent}`, `{project}`, `{terminal}`, and `{directory}` placeholders.
+- If the menu bar is too crowded to reach the icon, reopen **Agent Monitor** from Spotlight or Finder to bring Settings to the foreground.
 
 Settings are grouped by surface. **Menu Bar** controls the menu opened from the status icon. **Floating Overlay** controls widget visibility, density, and how long completed sessions remain visible. Claude Code speech is triggered only by its `Stop` event.
 

@@ -647,10 +647,8 @@ struct SessionRow: View {
     }
 
     nonisolated static func minimalTime(for session: SessionRecord, at date: Date) -> String {
-        if session.status == .running {
-            return elapsedTime(from: session.startedAt, to: date)
-        }
-        let seconds = max(0, Int(date.timeIntervalSince(session.updatedAt)))
+        let referenceDate = session.status == .running ? session.startedAt : session.updatedAt
+        let seconds = max(0, Int(date.timeIntervalSince(referenceDate)))
         if seconds < 60 { return "\(seconds)s" }
         if seconds < 3_600 { return "\(seconds / 60)m" }
         return "\(seconds / 3_600)h"
@@ -667,6 +665,7 @@ struct SettingsView: View {
     @AppStorage("speechEnabled") private var speechEnabled = false
     @AppStorage("speakOnCompletion") private var speakOnCompletion = true
     @AppStorage("speechVoice") private var speechVoice = SpeechService.systemDefaultVoice
+    @AppStorage("speechCompletionTemplate") private var speechCompletionTemplate = CompletionSpeechTemplate.defaultValue
     @AppStorage("overlayDensity") private var overlayDensity = OverlayDensity.standard.rawValue
     @AppStorage("menuBarDensity") private var menuBarDensity = MenuBarDensity.standard.rawValue
     @AppStorage("showTerminalInMenuBar") private var showTerminalInMenuBar = true
@@ -743,25 +742,52 @@ struct SettingsView: View {
                 .onChange(of: overlayRetentionMinutes) { _, _ in runtime.refreshOverlay() }
             }
 
-            Section("Alerts") {
-                Toggle("Show macOS notifications", isOn: $notificationsEnabled)
-                    .onChange(of: notificationsEnabled) { _, value in runtime.requestNotifications(value) }
-                Toggle("Speak session status", isOn: $speechEnabled)
-                Toggle("When a session finishes", isOn: $speakOnCompletion)
-                    .disabled(!speechEnabled)
-                Text("Claude is announced only when its Stop event reports that the turn finished.")
+            Section("macOS Alerts") {
+                Text("Agent Monitor can post a standard macOS notification when an agent finishes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle("Notify when an agent finishes", isOn: $notificationsEnabled)
+                    .onChange(of: notificationsEnabled) { _, value in runtime.requestNotifications(value) }
+            }
+
+            Section("Finished Voice Alerts") {
+                Text("Voice alerts are spoken only when an agent turn finishes. Ongoing activity and tool calls stay silent.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Speak when an agent finishes", isOn: completionSpeechEnabled)
                 Picker("Voice", selection: $speechVoice) {
                     ForEach(SpeechService.availableVoices, id: \.self) { voice in
                         Text(voice).tag(voice)
                     }
                 }
-                .disabled(!speechEnabled)
-                Button("Test Voice") {
-                    SpeechService.speak("Agent finished", voice: speechVoice)
+                .disabled(!completionSpeechEnabled.wrappedValue)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Custom message (optional)")
+                        .font(.subheadline)
+                    TextField("Leave empty to use the default message", text: $speechCompletionTemplate)
+                        .textFieldStyle(.roundedBorder)
+                    HStack(spacing: 4) {
+                        Text("Default:")
+                        Text(CompletionSpeechTemplate.defaultValue)
+                            .monospaced()
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Text("Placeholders: {agent}, {project}, {terminal}, {directory}")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Divider()
+                    Text("Preview")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(completionSpeechPreview)
+                        .textSelection(.enabled)
                 }
-                .disabled(!speechEnabled)
+                .disabled(!completionSpeechEnabled.wrappedValue)
+                Button("Test Voice") {
+                    SpeechService.speak(completionSpeechPreview, voice: speechVoice)
+                }
+                .disabled(!completionSpeechEnabled.wrappedValue)
             }
 
             Section("Data") {
@@ -776,7 +802,27 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .frame(width: 600, height: runtime.launchAtLoginNeedsApproval ? 720 : 680)
+        .frame(width: 600, height: runtime.launchAtLoginNeedsApproval ? 800 : 760)
+    }
+
+    private var completionSpeechEnabled: Binding<Bool> {
+        Binding(
+            get: { speechEnabled && speakOnCompletion },
+            set: {
+                speechEnabled = $0
+                speakOnCompletion = $0
+            }
+        )
+    }
+
+    private var completionSpeechPreview: String {
+        CompletionSpeechTemplate.render(
+            speechCompletionTemplate,
+            agent: "Codex",
+            project: "agent-monitor",
+            terminal: "Terminal",
+            directory: "/Users/example/agent-monitor"
+        )
     }
 }
 
@@ -810,7 +856,7 @@ private extension SessionStatus {
     }
 }
 
-private extension TerminalHost {
+extension TerminalHost {
     @MainActor
     var displayName: String {
         switch kind {

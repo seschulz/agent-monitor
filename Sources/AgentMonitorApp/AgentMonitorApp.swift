@@ -40,6 +40,11 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
         runtime.stop()
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSettings()
+        return true
+    }
+
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem = item
@@ -197,7 +202,7 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
         if settingsWindowController == nil {
             let hostingController = NSHostingController(rootView: SettingsView(runtime: runtime))
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 600, height: 712),
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 800),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
