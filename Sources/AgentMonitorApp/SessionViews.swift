@@ -655,9 +655,28 @@ struct SessionRow: View {
     }
 }
 
+private enum SettingsPane: String, CaseIterable, Identifiable {
+    case general
+    case interface
+    case notifications
+    case advanced
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .general: "General"
+        case .interface: "Interface"
+        case .notifications: "Notifications"
+        case .advanced: "Advanced"
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var runtime: MonitorRuntime
     @ObservedObject private var updateService: UpdateService
+    @State private var selectedPane = SettingsPane.general
     @AppStorage("overlayEnabled") private var overlayEnabled = true
     @AppStorage("notificationsEnabled") private var notificationsEnabled = false
     @AppStorage("readyRetentionMinutes") private var readyRetentionMinutes = 15
@@ -677,154 +696,218 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Application") {
-                Toggle("Launch at login", isOn: Binding(
-                    get: { runtime.launchAtLoginEnabled },
-                    set: { runtime.setLaunchAtLogin($0) }
-                ))
-                if runtime.launchAtLoginNeedsApproval {
-                    HStack {
-                        Text("macOS needs your approval before Agent Monitor can launch automatically.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Open Login Items") { runtime.openLoginItemSettings() }
-                    }
+        VStack(spacing: 0) {
+            Picker("Settings category", selection: $selectedPane) {
+                ForEach(SettingsPane.allCases) { pane in
+                    Text(pane.label).tag(pane)
                 }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+
+            Divider()
+
+            Form {
+                selectedSettings
+            }
+            .formStyle(.grouped)
+        }
+        .frame(minWidth: 560, idealWidth: 620, minHeight: 520, idealHeight: 640)
+    }
+
+    @ViewBuilder
+    private var selectedSettings: some View {
+        switch selectedPane {
+        case .general:
+            generalSettings
+        case .interface:
+            interfaceSettings
+        case .notifications:
+            notificationSettings
+        case .advanced:
+            advancedSettings
+        }
+    }
+
+    @ViewBuilder
+    private var generalSettings: some View {
+        Section("Startup") {
+            Toggle("Launch at login", isOn: Binding(
+                get: { runtime.launchAtLoginEnabled },
+                set: { runtime.setLaunchAtLogin($0) }
+            ))
+            if runtime.launchAtLoginNeedsApproval {
                 HStack {
-                    LabeledContent(
-                        "Codex and Claude Code",
-                        value: runtime.integrationsInstalled ? "Installed" : "Not installed"
-                    )
-                    Spacer()
-                    if runtime.integrationsInstalled {
-                        Button("Remove Integrations") { runtime.removeIntegrations() }
-                    } else {
-                        Button("Install Integrations") { _ = runtime.installIntegrations() }
-                    }
-                }
-                if let message = runtime.integrationMessage {
-                    Text(message)
+                    Text("Allow Agent Monitor in Login Items to launch it automatically.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Updates") {
-                Toggle("Automatically check for updates", isOn: Binding(
-                    get: { updateService.automaticallyChecksForUpdates },
-                    set: { updateService.setAutomaticallyChecksForUpdates($0) }
-                ))
-                HStack {
-                    LabeledContent("Current version", value: updateService.currentVersion)
                     Spacer()
-                    Button("Check for Updates…") { updateService.checkNow() }
-                        .disabled(!updateService.canCheckForUpdates)
-                }
-                Text("Sparkle checks GitHub Releases and verifies every update before installing it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Menu Bar") {
-                Text("Controls the session list shown when you click the Agent Monitor icon in the menu bar.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Picker("Row density", selection: $menuBarDensity) {
-                    ForEach(MenuBarDensity.allCases) { density in
-                        Text(density.label).tag(density.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                Toggle("Show provider and terminal", isOn: $showTerminalInMenuBar)
-                Stepper("Keep completed sessions for \(readyRetentionMinutes) minutes", value: $readyRetentionMinutes, in: 1...120)
-            }
-
-            Section("Floating Overlay") {
-                Toggle("Show floating overlay", isOn: $overlayEnabled)
-                    .onChange(of: overlayEnabled) { _, _ in runtime.refreshOverlay() }
-                Picker("Widget density", selection: $overlayDensity) {
-                    ForEach(OverlayDensity.allCases) { density in
-                        Text(density.label).tag(density.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .disabled(!overlayEnabled)
-                .onChange(of: overlayDensity) { _, _ in runtime.refreshOverlay() }
-                Toggle("Show completed sessions", isOn: $showReadyInOverlay)
-                    .disabled(!overlayEnabled)
-                    .onChange(of: showReadyInOverlay) { _, _ in runtime.refreshOverlay() }
-                Stepper(
-                    "Hide completed sessions after \(overlayRetentionMinutes) minutes",
-                    value: $overlayRetentionMinutes,
-                    in: 1...120
-                )
-                .disabled(!overlayEnabled)
-                .onChange(of: overlayRetentionMinutes) { _, _ in runtime.refreshOverlay() }
-            }
-
-            Section("macOS Alerts") {
-                Text("Agent Monitor can post a standard macOS notification when an agent finishes.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Toggle("Notify when an agent finishes", isOn: $notificationsEnabled)
-                    .onChange(of: notificationsEnabled) { _, value in runtime.requestNotifications(value) }
-            }
-
-            Section("Finished Voice Alerts") {
-                Text("Voice alerts are spoken only when an agent turn finishes. Ongoing activity and tool calls stay silent.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Toggle("Speak when an agent finishes", isOn: completionSpeechEnabled)
-                Picker("Voice", selection: $speechVoice) {
-                    ForEach(SpeechService.availableVoices, id: \.self) { voice in
-                        Text(voice).tag(voice)
-                    }
-                }
-                .disabled(!completionSpeechEnabled.wrappedValue)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Custom message (optional)")
-                        .font(.subheadline)
-                    TextField("Leave empty to use the default message", text: $speechCompletionTemplate)
-                        .textFieldStyle(.roundedBorder)
-                    HStack(spacing: 4) {
-                        Text("Default:")
-                        Text(CompletionSpeechTemplate.defaultValue)
-                            .monospaced()
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    Text("Placeholders: {agent}, {project}, {terminal}, {directory}")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Divider()
-                    Text("Preview")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(completionSpeechPreview)
-                        .textSelection(.enabled)
-                }
-                .disabled(!completionSpeechEnabled.wrappedValue)
-                Button("Test Voice") {
-                    SpeechService.speak(completionSpeechPreview, voice: speechVoice)
-                }
-                .disabled(!completionSpeechEnabled.wrappedValue)
-            }
-
-            Section("Data") {
-                LabeledContent("Event socket", value: AppPaths.socketURL.path)
-                    .textSelection(.enabled)
-                HStack {
-                    Button("Clear session history") { runtime.store.clearAll() }
-                    Spacer()
-                    Button("Open data folder") { NSWorkspace.shared.open(AppPaths.baseDirectory) }
+                    Button("Open Login Items") { runtime.openLoginItemSettings() }
                 }
             }
         }
-        .formStyle(.grouped)
-        .padding()
-        .frame(width: 600, height: runtime.launchAtLoginNeedsApproval ? 800 : 760)
+
+        Section("Agent Integrations") {
+            Text("Hooks let Codex and Claude Code report session activity to Agent Monitor.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                LabeledContent(
+                    "Codex and Claude Code",
+                    value: runtime.integrationsInstalled ? "Installed" : "Not installed"
+                )
+                Spacer()
+                if runtime.integrationsInstalled {
+                    Button("Remove Hooks") { runtime.removeIntegrations() }
+                } else {
+                    Button("Install Hooks") { _ = runtime.installIntegrations() }
+                }
+            }
+            if let message = runtime.integrationMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+
+        Section("Software Updates") {
+            Toggle("Check for updates automatically", isOn: Binding(
+                get: { updateService.automaticallyChecksForUpdates },
+                set: { updateService.setAutomaticallyChecksForUpdates($0) }
+            ))
+            HStack {
+                LabeledContent("Installed version", value: updateService.currentVersion)
+                Spacer()
+                Button("Check for Updates…") { updateService.checkNow() }
+                    .disabled(!updateService.canCheckForUpdates)
+            }
+            Text("Updates come from GitHub Releases and are verified by Sparkle before installation.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var interfaceSettings: some View {
+        Section("Menu Bar") {
+            Text("Customize the session list that opens from the menu bar icon.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("Session row size", selection: $menuBarDensity) {
+                ForEach(MenuBarDensity.allCases) { density in
+                    Text(density.label).tag(density.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            Toggle("Show agent and terminal names", isOn: $showTerminalInMenuBar)
+            Stepper("Keep finished sessions for \(readyRetentionMinutes) minutes", value: $readyRetentionMinutes, in: 1...120)
+        }
+
+        Section("Floating Widget") {
+            Text("Show active and recently finished sessions above other windows.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Show floating widget", isOn: $overlayEnabled)
+                .onChange(of: overlayEnabled) { _, _ in runtime.refreshOverlay() }
+            Picker("Widget size", selection: $overlayDensity) {
+                ForEach(OverlayDensity.allCases) { density in
+                    Text(density.label).tag(density.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!overlayEnabled)
+            .onChange(of: overlayDensity) { _, _ in runtime.refreshOverlay() }
+            Toggle("Show finished sessions", isOn: $showReadyInOverlay)
+                .disabled(!overlayEnabled)
+                .onChange(of: showReadyInOverlay) { _, _ in runtime.refreshOverlay() }
+            Stepper(
+                "Hide finished sessions after \(overlayRetentionMinutes) minutes",
+                value: $overlayRetentionMinutes,
+                in: 1...120
+            )
+            .disabled(!overlayEnabled || !showReadyInOverlay)
+            .onChange(of: overlayRetentionMinutes) { _, _ in runtime.refreshOverlay() }
+        }
+    }
+
+    @ViewBuilder
+    private var notificationSettings: some View {
+        Section("macOS Notifications") {
+            Text("Show a standard notification when an agent finishes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Notify when an agent finishes", isOn: $notificationsEnabled)
+                .onChange(of: notificationsEnabled) { _, value in runtime.requestNotifications(value) }
+        }
+
+        Section("Spoken Notifications") {
+            Text("Announce finished agent turns. Ongoing activity and tool calls remain silent.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Announce finished agent turns", isOn: completionSpeechEnabled)
+            Picker("Voice", selection: $speechVoice) {
+                ForEach(SpeechService.availableVoices, id: \.self) { voice in
+                    Text(voice).tag(voice)
+                }
+            }
+            .disabled(!completionSpeechEnabled.wrappedValue)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Message template")
+                    .font(.subheadline)
+                TextField(
+                    "Message template",
+                    text: $speechCompletionTemplate,
+                    prompt: Text(CompletionSpeechTemplate.defaultValue)
+                )
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Spoken message template")
+                Text("Leave blank to use “\(CompletionSpeechTemplate.defaultValue)”.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Available placeholders: {agent}, {project}, {terminal}, {directory}")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Divider()
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Preview")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(completionSpeechPreview)
+                        .textSelection(.enabled)
+                }
+            }
+            .disabled(!completionSpeechEnabled.wrappedValue)
+            Button("Play Preview") {
+                SpeechService.speak(completionSpeechPreview, voice: speechVoice)
+            }
+            .disabled(!completionSpeechEnabled.wrappedValue)
+        }
+    }
+
+    @ViewBuilder
+    private var advancedSettings: some View {
+        Section("Session Data") {
+            Text("Session history and internal state are stored locally on this Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            LabeledContent("Data folder") {
+                Text(AppPaths.baseDirectory.path)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            HStack {
+                Button("Clear Session History") { runtime.store.clearAll() }
+                Spacer()
+                Button("Open Data Folder") { NSWorkspace.shared.open(AppPaths.baseDirectory) }
+            }
+        }
     }
 
     private var completionSpeechEnabled: Binding<Bool> {

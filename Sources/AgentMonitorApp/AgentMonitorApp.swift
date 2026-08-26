@@ -202,7 +202,7 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
         if settingsWindowController == nil {
             let hostingController = NSHostingController(rootView: SettingsView(runtime: runtime))
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 600, height: 800),
+                contentRect: NSRect(x: 0, y: 0, width: 620, height: 640),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
@@ -210,7 +210,7 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
             window.title = "Agent Monitor Settings"
             window.contentViewController = hostingController
             window.isReleasedWhenClosed = false
-            window.minSize = NSSize(width: 520, height: 560)
+            window.minSize = NSSize(width: 560, height: 520)
             window.setFrameAutosaveName("AgentMonitorSettings")
             window.center()
             settingsWindowController = NSWindowController(window: window)
