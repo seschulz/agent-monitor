@@ -20,11 +20,18 @@ jobs:
       - name: Build release app
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.${GITHUB_RUN_NUMBER}"
+          fi
           xcodebuild \
             -project AgentMonitor.xcodeproj \
             -scheme AgentMonitor \
             -configuration Release \
             -derivedDataPath build \
+            MARKETING_VERSION="$version" \
+            CURRENT_PROJECT_VERSION="$version" \
             CODE_SIGNING_ALLOWED=NO \
             build
 
@@ -40,7 +47,9 @@ jobs:
           fi
 
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$app/Contents/Info.plist"
+          # Ad-hoc distribution has no Developer ID identity, so re-sign the
+          # complete bundle after changing its version metadata.
           codesign --force --deep --sign - "$app"
           codesign --verify --deep --strict "$app"
 
@@ -51,9 +60,37 @@ jobs:
           mkdir -p dist
           image="Agent-Monitor-$version.dmg"
           hdiutil create -volname "Agent Monitor" -srcfolder "$staging" -format UDZO -ov "dist/$image"
-          cd dist
-          shasum -a 256 "$image" > "$image.sha256"
           echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Generate signed Sparkle appcast
+        if: github.ref_type == 'tag'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SPARKLE_PRIVATE_KEY"
+          sparkle_version="2.9.6"
+          sparkle_dir="$RUNNER_TEMP/sparkle"
+          mkdir -p "$sparkle_dir"
+          curl -fsSL \
+            "https://github.com/sparkle-project/Sparkle/releases/download/$sparkle_version/Sparkle-$sparkle_version.tar.xz" \
+            -o "$sparkle_dir/sparkle.tar.xz"
+          tar -xJf "$sparkle_dir/sparkle.tar.xz" -C "$sparkle_dir"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | "$sparkle_dir/bin/generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/" \
+            --link "https://github.com/${GITHUB_REPOSITORY}" \
+            dist
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          for file in *.dmg appcast.xml; do
+            if [[ -f "$file" ]]; then
+              shasum -a 256 "$file" > "$file.sha256"
+            fi
+          done
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

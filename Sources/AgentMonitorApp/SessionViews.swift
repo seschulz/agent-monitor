@@ -657,6 +657,7 @@ struct SessionRow: View {
 
 struct SettingsView: View {
     @ObservedObject var runtime: MonitorRuntime
+    @ObservedObject private var updateService: UpdateService
     @AppStorage("overlayEnabled") private var overlayEnabled = true
     @AppStorage("notificationsEnabled") private var notificationsEnabled = false
     @AppStorage("readyRetentionMinutes") private var readyRetentionMinutes = 15
@@ -669,6 +670,11 @@ struct SettingsView: View {
     @AppStorage("overlayDensity") private var overlayDensity = OverlayDensity.standard.rawValue
     @AppStorage("menuBarDensity") private var menuBarDensity = MenuBarDensity.standard.rawValue
     @AppStorage("showTerminalInMenuBar") private var showTerminalInMenuBar = true
+
+    init(runtime: MonitorRuntime) {
+        self.runtime = runtime
+        _updateService = ObservedObject(wrappedValue: runtime.updateService)
+    }
 
     var body: some View {
         Form {
@@ -703,6 +709,22 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Updates") {
+                Toggle("Automatically check for updates", isOn: Binding(
+                    get: { updateService.automaticallyChecksForUpdates },
+                    set: { updateService.setAutomaticallyChecksForUpdates($0) }
+                ))
+                HStack {
+                    LabeledContent("Current version", value: updateService.currentVersion)
+                    Spacer()
+                    Button("Check for Updates…") { updateService.checkNow() }
+                        .disabled(!updateService.canCheckForUpdates)
+                }
+                Text("Sparkle checks GitHub Releases and verifies every update before installing it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Menu Bar") {

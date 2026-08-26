@@ -12,6 +12,7 @@ The app shows which project and agent are active, how long each session has been
 - Keeps completed sessions visible for a configurable period
 - Supports dismissing one completed session or clearing all of them
 - Can launch automatically at login
+- Uses Sparkle to check, verify, and install GitHub Releases automatically or on demand
 - Provides optional macOS notifications and spoken completion alerts
 - Recognizes Terminal, iTerm2, Ghostty, IntelliJ terminals, and other macOS terminal hosts when their application metadata is available
 - Stores session metadata locally and does not record prompts, responses, commands, or environment variables
@@ -61,6 +62,8 @@ The menu-bar icon opens the session list. A rotating blue symbol means a session
 - If the menu bar is too crowded to reach the icon, reopen **Agent Monitor** from Spotlight or Finder to bring Settings to the foreground.
 
 Settings are grouped by surface. **Menu Bar** controls the menu opened from the status icon. **Floating Overlay** controls widget visibility, density, and how long completed sessions remain visible. Claude Code speech is triggered only by its `Stop` event.
+
+Agent Monitor uses the open-source Sparkle framework to check GitHub Releases once per day. When a newer version is available, choose **Install Update**, **Remind Me Later**, or **Skip This Version**. You can also check immediately under **Settings → Updates**. Every update archive is verified with Agent Monitor's Ed25519 signing key before installation. The first installation still requires the Control-click step described above, but later updates are installed from inside the app.
 
 ## Privacy and local data
 
@@ -173,7 +176,9 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The workflow builds a universal Release app, writes the tag version into its `Info.plist`, applies an ad-hoc signature, verifies the bundle, creates a drag-to-Applications DMG, and publishes it with a SHA-256 checksum. Re-running the workflow for an existing tag replaces its attached files.
+The workflow builds a universal Release app, writes the tag version into its `Info.plist`, applies an ad-hoc signature, verifies the bundle, creates a drag-to-Applications DMG, generates a Sparkle appcast, signs the update with Ed25519, and publishes everything with SHA-256 checksums. Re-running the workflow for an existing tag replaces its attached files.
+
+Sparkle's private Ed25519 key is stored in the repository's `SPARKLE_PRIVATE_KEY` Actions secret and in the maintainer's login Keychain under the `agent-monitor` account. Never commit or regenerate this key: existing installations trust the matching public key embedded in `Info.plist`, so losing it would break automatic updates.
 
 Public distribution without Gatekeeper warnings requires a Developer ID Application certificate and Apple notarization. Those credentials are intentionally not stored in this repository; a future notarized workflow should load them from encrypted GitHub Actions secrets.
 

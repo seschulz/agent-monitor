@@ -13,7 +13,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.0.7</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSMinimumSystemVersion</key>
@@ -22,6 +22,14 @@
     <true/>
     <key>LSUIElement</key>
     <true/>
+    <key>SUFeedURL</key>
+    <string>https://github.com/seschulz/agent-monitor/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>WA55/azAhP+KBTkaQno59dCl2+xQeQV6kwU0OWoEqVs=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
     <key>NSAppleEventsUsageDescription</key>
     <string>Agent Monitor uses automation to return you to the terminal tab running an agent session.</string>
     <key>NSHumanReadableCopyright</key>

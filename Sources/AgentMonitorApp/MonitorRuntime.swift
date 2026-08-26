@@ -9,6 +9,7 @@ import UserNotifications
 @MainActor
 final class MonitorRuntime: ObservableObject {
     let store = SessionStore()
+    let updateService = UpdateService()
     @Published private(set) var launchAtLoginEnabled = false
     @Published private(set) var launchAtLoginNeedsApproval = false
     @Published private(set) var integrationsInstalled = false

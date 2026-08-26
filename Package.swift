@@ -9,11 +9,17 @@ let package = Package(
         .executable(name: "AgentMonitorApp", targets: ["AgentMonitorApp"]),
         .executable(name: "agent-monitor-helper", targets: ["AgentMonitorHelper"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.6")
+    ],
     targets: [
         .target(name: "AgentMonitorShared"),
         .executableTarget(
             name: "AgentMonitorApp",
-            dependencies: ["AgentMonitorShared"],
+            dependencies: [
+                "AgentMonitorShared",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             exclude: ["Info.plist", "Assets.xcassets"]
         ),
         .executableTarget(name: "AgentMonitorHelper", dependencies: ["AgentMonitorShared"]),
