@@ -39,6 +39,9 @@ final class MonitorRuntime: ObservableObject {
         store.reconcileProcesses()
         startDesktopSessionMonitoring()
         refreshLaunchAtLoginStatus()
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            prepareStableHelperAndMigrateHooks()
+        }
         refreshIntegrationStatus()
         let server = SocketServer { [weak self] event in
             Task { @MainActor in
@@ -149,12 +152,15 @@ final class MonitorRuntime: ObservableObject {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    var helperURL: URL {
+    private var bundledHelperURL: URL {
         Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/agent-monitor-helper")
     }
 
+    var helperURL: URL { AppPaths.helperURL }
+
     func installIntegrations() -> Bool {
         do {
+            try StableHelperInstaller.install(from: bundledHelperURL, to: helperURL)
             try HookConfigurationService.install(helperURL: helperURL)
             integrationsInstalled = true
             integrationMessage = "Codex and Claude Code integrations are installed."
@@ -168,6 +174,7 @@ final class MonitorRuntime: ObservableObject {
     func removeIntegrations() {
         do {
             try HookConfigurationService.remove()
+            try? FileManager.default.removeItem(at: helperURL)
             integrationsInstalled = false
             integrationMessage = "Agent integrations were removed."
         } catch {
@@ -177,6 +184,18 @@ final class MonitorRuntime: ObservableObject {
 
     func refreshIntegrationStatus() {
         integrationsInstalled = HookConfigurationService.isInstalled(helperURL: helperURL)
+    }
+
+    private func prepareStableHelperAndMigrateHooks() {
+        do {
+            try StableHelperInstaller.install(from: bundledHelperURL, to: helperURL)
+            if HookConfigurationService.hasManagedInstallation(),
+               !HookConfigurationService.isInstalled(helperURL: helperURL) {
+                try HookConfigurationService.install(helperURL: helperURL)
+            }
+        } catch {
+            store.showMessage("Could not prepare agent hooks: \(error.localizedDescription)")
+        }
     }
 
     private func refreshLaunchAtLoginStatus() {

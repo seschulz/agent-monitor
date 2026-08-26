@@ -75,21 +75,21 @@ Session data and the socket live under:
 ~/Library/Application Support/AgentMonitor
 ```
 
-Use **Settings → Data → Clear session history** to remove saved sessions.
+Use **Settings → Advanced → Clear Session History** to remove saved sessions.
 
 ## Troubleshooting
 
 If no sessions appear, confirm that Agent Monitor is running and inspect the helper connection:
 
 ```sh
-"$HOME/Applications/Agent Monitor.app/Contents/MacOS/agent-monitor-helper" doctor
+"$HOME/Library/Application Support/AgentMonitor/bin/agent-monitor-helper" doctor
 ```
 
-You can safely reinstall the hooks from **Settings → Application** without removing unrelated hooks. From a source checkout, the equivalent command is:
+You can safely reinstall the hooks from **Settings → General → Agent Integrations** without removing unrelated hooks. The hooks use a stable helper copy under Application Support, so replacing or automatically updating the app cannot interrupt them. From a source checkout, the equivalent command is:
 
 ```sh
 python3 scripts/configure.py install \
-  --helper "$HOME/Applications/Agent Monitor.app/Contents/MacOS/agent-monitor-helper"
+  --helper "$HOME/Library/Application Support/AgentMonitor/bin/agent-monitor-helper"
 ```
 
 To preview configuration changes first, append `--dry-run`. The first attempt to focus Terminal, iTerm2, or an IDE may cause macOS to request Automation permission. Agent Monitor does not require Screen Recording permission.
@@ -161,7 +161,7 @@ The hook configurator can be tested or inspected independently:
 ```sh
 python3 -m unittest Tests/configure_test.py
 python3 scripts/configure.py install \
-  --helper "$HOME/Applications/Agent Monitor.app/Contents/MacOS/agent-monitor-helper" \
+  --helper "$HOME/Library/Application Support/AgentMonitor/bin/agent-monitor-helper" \
   --dry-run
 ```
 

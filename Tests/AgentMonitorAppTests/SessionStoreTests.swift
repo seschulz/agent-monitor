@@ -26,6 +26,7 @@ import AgentMonitorShared
     try HookConfigurationService.install(helperURL: helper, paths: paths)
 
     #expect(HookConfigurationService.isInstalled(helperURL: helper, paths: paths))
+    #expect(HookConfigurationService.hasManagedInstallation(paths: paths))
     #expect(try String(contentsOf: paths.codexHooks).contains("existing-hook"))
     #expect(try String(contentsOf: paths.codexHooks).contains(helper.path))
     #expect(try String(contentsOf: paths.claudeSettings).contains(helper.path))
@@ -37,6 +38,26 @@ import AgentMonitorShared
     #expect(!(try String(contentsOf: paths.codexHooks).contains("agent-monitor-helper")))
     #expect(!(try String(contentsOf: paths.claudeSettings).contains("agent-monitor-helper")))
     #expect(try String(contentsOf: paths.codexConfig).contains(#"notify = ["existing-notify","--quiet"]"#))
+    #expect(!HookConfigurationService.hasManagedInstallation(paths: paths))
+}
+
+@Test func stableHelperInstallerReplacesTheHelperAndKeepsItExecutable() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let source = root.appendingPathComponent("bundled-helper")
+    let destination = root.appendingPathComponent("Application Support/bin/agent-monitor-helper")
+    try Data("first".utf8).write(to: source)
+
+    try StableHelperInstaller.install(from: source, to: destination)
+    #expect(try String(contentsOf: destination, encoding: .utf8) == "first")
+
+    try Data("second".utf8).write(to: source)
+    try StableHelperInstaller.install(from: source, to: destination)
+    #expect(try String(contentsOf: destination, encoding: .utf8) == "second")
+    let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
+    let permissions = attributes[.posixPermissions] as? NSNumber
+    #expect(permissions?.intValue == 0o755)
 }
 
 @Test func nativeIntegrationChainsCodexAppCompletionWithoutRecursion() throws {
@@ -100,6 +121,32 @@ import AgentMonitorShared
     )
 
     #expect(corrected == saved)
+}
+
+@MainActor
+@Test func overlayPositionKeepsItsScreenEdgeInsetsAfterResolutionChange() {
+    let windowSize = NSSize(width: 320, height: 160)
+    let originalScreen = NSRect(x: 0, y: 0, width: 1_440, height: 900)
+    let originalTopLeft = NSPoint(x: 1_100, y: 880)
+    let anchor = OverlayController.positionAnchor(
+        for: originalTopLeft,
+        windowSize: windowSize,
+        visibleFrame: originalScreen,
+        screenID: 42
+    )
+
+    let resizedScreen = NSRect(x: -200, y: 40, width: 2_560, height: 1_440)
+    let restored = OverlayController.topLeft(
+        for: anchor,
+        windowSize: windowSize,
+        visibleFrame: resizedScreen
+    )
+
+    #expect(anchor.horizontalEdge == .right)
+    #expect(anchor.verticalEdge == .top)
+    #expect(anchor.horizontalInset == 20)
+    #expect(anchor.verticalInset == 20)
+    #expect(restored == NSPoint(x: 2_020, y: 1_460))
 }
 
 @Test func minimalOverlayTimeFormatting() {
@@ -677,6 +724,48 @@ import AgentMonitorShared
     #expect(store.overlaySessions.count == 1)
     store.dismiss("codex:done")
     #expect(store.overlaySessions.isEmpty)
+}
+
+@MainActor
+@Test func dismissHidesRunningSessionUntilTheNextPrompt() {
+    let suite = "AgentMonitorTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let now = Date()
+    store.apply(.init(
+        eventType: .userPromptSubmit,
+        occurredAt: now,
+        sessionId: "running",
+        turnId: "turn-1",
+        cwd: "/tmp/running",
+        status: .running,
+        terminal: .init(kind: .unknown)
+    ))
+
+    store.dismiss("codex:running", at: now.addingTimeInterval(1))
+    store.apply(.init(
+        eventType: .postToolUse,
+        occurredAt: now.addingTimeInterval(2),
+        sessionId: "running",
+        turnId: "turn-1",
+        cwd: "/tmp/running",
+        status: .running,
+        terminal: .init(kind: .unknown)
+    ))
+    #expect(store.overlaySessions(at: now.addingTimeInterval(3)).isEmpty)
+
+    store.apply(.init(
+        eventType: .userPromptSubmit,
+        occurredAt: now.addingTimeInterval(4),
+        sessionId: "running",
+        turnId: "turn-2",
+        cwd: "/tmp/running",
+        status: .running,
+        terminal: .init(kind: .unknown)
+    ))
+    #expect(store.overlaySessions(at: now.addingTimeInterval(5)).map(\.id) == ["codex:running"])
 }
 
 @MainActor

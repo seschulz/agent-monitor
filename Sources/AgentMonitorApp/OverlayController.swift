@@ -4,9 +4,29 @@ import SwiftUI
 @MainActor
 final class OverlayController: NSObject, NSWindowDelegate {
     private static let topLeftDefaultsKey = "overlayTopLeft"
+    private static let positionAnchorDefaultsKey = "overlayPositionAnchor"
+
+    struct PositionAnchor: Codable, Equatable {
+        enum HorizontalEdge: String, Codable {
+            case left
+            case right
+        }
+
+        enum VerticalEdge: String, Codable {
+            case top
+            case bottom
+        }
+
+        let screenID: UInt32?
+        let horizontalEdge: HorizontalEdge
+        let horizontalInset: CGFloat
+        let verticalEdge: VerticalEdge
+        let verticalInset: CGFloat
+    }
 
     private let panel: NSPanel
     private var savedTopLeft: NSPoint?
+    private var savedPositionAnchor: PositionAnchor?
     private var userMoveInProgress = false
     private var savePositionWorkItem: DispatchWorkItem?
 
@@ -28,7 +48,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.contentView = NSHostingView(rootView: OverlayView(store: store, sessionsDidChange: sessionsDidChange))
-        if let saved = UserDefaults.standard.string(forKey: Self.topLeftDefaultsKey), !saved.isEmpty {
+        if let anchor = Self.loadPositionAnchor(),
+           let screen = Self.screen(matching: anchor.screenID) ?? NSScreen.main {
+            let topLeft = Self.topLeft(for: anchor, windowSize: panel.frame.size, visibleFrame: screen.visibleFrame)
+            savedPositionAnchor = anchor
+            savedTopLeft = topLeft
+            panel.setFrameTopLeftPoint(topLeft)
+        } else if let saved = UserDefaults.standard.string(forKey: Self.topLeftDefaultsKey), !saved.isEmpty {
             let topLeft = NSPointFromString(saved)
             savedTopLeft = topLeft
             panel.setFrameTopLeftPoint(topLeft)
@@ -39,6 +65,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.setFrameTopLeftPoint(topLeft)
         }
         ensureOnScreen()
+        persistCurrentPosition()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screenParametersDidChange),
@@ -65,8 +92,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard abs(panel.frame.width - width) > 0.5 else { return }
         let topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
         panel.setContentSize(NSSize(width: width, height: panel.contentRect(forFrameRect: panel.frame).height))
-        panel.setFrameTopLeftPoint(panel.isVisible ? topLeft : (savedTopLeft ?? topLeft))
-        ensureOnScreen()
+        if savedPositionAnchor != nil {
+            restoreAnchoredPosition()
+        } else {
+            panel.setFrameTopLeftPoint(panel.isVisible ? topLeft : (savedTopLeft ?? topLeft))
+            ensureOnScreen()
+            persistCurrentPosition()
+        }
     }
 
     func close() {
@@ -76,7 +108,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     @objc private func screenParametersDidChange() {
-        ensureOnScreen()
+        restoreAnchoredPosition()
     }
 
     private func ensureOnScreen() {
@@ -94,7 +126,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         userMoveInProgress = false
         savedTopLeft = corrected
         panel.setFrameTopLeftPoint(corrected)
-        UserDefaults.standard.set(NSStringFromPoint(corrected), forKey: Self.topLeftDefaultsKey)
+        persistCurrentPosition()
     }
 
     static func reachableTopLeft(
@@ -131,6 +163,107 @@ final class OverlayController: NSObject, NSWindowDelegate {
         )
     }
 
+    static func positionAnchor(
+        for topLeft: NSPoint,
+        windowSize: NSSize,
+        visibleFrame: NSRect,
+        screenID: UInt32? = nil
+    ) -> PositionAnchor {
+        let windowFrame = NSRect(
+            x: topLeft.x,
+            y: topLeft.y - windowSize.height,
+            width: windowSize.width,
+            height: windowSize.height
+        )
+        let leftInset = max(0, windowFrame.minX - visibleFrame.minX)
+        let rightInset = max(0, visibleFrame.maxX - windowFrame.maxX)
+        let topInset = max(0, visibleFrame.maxY - windowFrame.maxY)
+        let bottomInset = max(0, windowFrame.minY - visibleFrame.minY)
+        return PositionAnchor(
+            screenID: screenID,
+            horizontalEdge: leftInset <= rightInset ? .left : .right,
+            horizontalInset: min(leftInset, rightInset),
+            verticalEdge: topInset <= bottomInset ? .top : .bottom,
+            verticalInset: min(topInset, bottomInset)
+        )
+    }
+
+    static func topLeft(for anchor: PositionAnchor, windowSize: NSSize, visibleFrame: NSRect) -> NSPoint {
+        let x = switch anchor.horizontalEdge {
+        case .left: visibleFrame.minX + anchor.horizontalInset
+        case .right: visibleFrame.maxX - windowSize.width - anchor.horizontalInset
+        }
+        let y = switch anchor.verticalEdge {
+        case .top: visibleFrame.maxY - anchor.verticalInset
+        case .bottom: visibleFrame.minY + windowSize.height + anchor.verticalInset
+        }
+        return NSPoint(x: x, y: y)
+    }
+
+    private func restoreAnchoredPosition() {
+        guard let anchor = savedPositionAnchor,
+              let screen = Self.screen(matching: anchor.screenID) ?? NSScreen.main else {
+            ensureOnScreen()
+            persistCurrentPosition()
+            return
+        }
+        let requested = Self.topLeft(for: anchor, windowSize: panel.frame.size, visibleFrame: screen.visibleFrame)
+        let corrected = Self.reachableTopLeft(
+            requested,
+            windowSize: panel.frame.size,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame),
+            preferredVisibleFrame: screen.visibleFrame
+        )
+        savePositionWorkItem?.cancel()
+        userMoveInProgress = false
+        savedTopLeft = corrected
+        panel.setFrameTopLeftPoint(corrected)
+        persistCurrentPosition(preferredScreen: screen)
+    }
+
+    private func persistCurrentPosition(preferredScreen: NSScreen? = nil) {
+        let topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        guard let screen = preferredScreen ?? Self.screen(containing: panel.frame) ?? NSScreen.main else { return }
+        let anchor = Self.positionAnchor(
+            for: topLeft,
+            windowSize: panel.frame.size,
+            visibleFrame: screen.visibleFrame,
+            screenID: Self.displayID(for: screen)
+        )
+        savedTopLeft = topLeft
+        savedPositionAnchor = anchor
+        UserDefaults.standard.set(NSStringFromPoint(topLeft), forKey: Self.topLeftDefaultsKey)
+        if let data = try? JSONEncoder().encode(anchor) {
+            UserDefaults.standard.set(data, forKey: Self.positionAnchorDefaultsKey)
+        }
+    }
+
+    private static func loadPositionAnchor() -> PositionAnchor? {
+        guard let data = UserDefaults.standard.data(forKey: positionAnchorDefaultsKey) else { return nil }
+        return try? JSONDecoder().decode(PositionAnchor.self, from: data)
+    }
+
+    private static func screen(matching displayID: UInt32?) -> NSScreen? {
+        guard let displayID else { return nil }
+        return NSScreen.screens.first { Self.displayID(for: $0) == displayID }
+    }
+
+    private static func screen(containing windowFrame: NSRect) -> NSScreen? {
+        let screen = NSScreen.screens.max { lhs, rhs in
+            let lhsIntersection = lhs.visibleFrame.intersection(windowFrame)
+            let rhsIntersection = rhs.visibleFrame.intersection(windowFrame)
+            return lhsIntersection.width * lhsIntersection.height < rhsIntersection.width * rhsIntersection.height
+        }
+        guard let screen else { return nil }
+        let intersection = screen.visibleFrame.intersection(windowFrame)
+        return intersection.width * intersection.height > 0 ? screen : nil
+    }
+
+    private static func displayID(for screen: NSScreen) -> UInt32? {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        return (screen.deviceDescription[key] as? NSNumber)?.uint32Value
+    }
+
     func windowWillMove(_ notification: Notification) {
         userMoveInProgress = true
         savePositionWorkItem?.cancel()
@@ -146,7 +279,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             guard let self else { return }
             let topLeft = NSPoint(x: self.panel.frame.minX, y: self.panel.frame.maxY)
             self.savedTopLeft = topLeft
-            UserDefaults.standard.set(NSStringFromPoint(topLeft), forKey: Self.topLeftDefaultsKey)
+            self.persistCurrentPosition()
             self.userMoveInProgress = false
         }
         savePositionWorkItem = workItem
@@ -164,7 +297,7 @@ private struct OverlayView: View {
     }
 
     private var dismissibleSessionIDs: Set<String> {
-        Set(store.overlaySessions.lazy.filter { $0.status == .ready }.map(\.id))
+        Set(store.overlaySessions.map(\.id))
     }
 
     var body: some View {
@@ -178,10 +311,8 @@ private struct OverlayView: View {
                         }
                     }
                     Button {
-                        if session.status == .ready {
-                            store.dismiss(session.id)
-                            sessionsDidChange()
-                        }
+                        store.dismiss(session.id)
+                        sessionsDidChange()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -190,10 +321,7 @@ private struct OverlayView: View {
                     .buttonStyle(.plain)
                     .font(density == .minimal ? .caption2 : .body)
                     .padding(.trailing, density == .minimal ? 4 : 8)
-                    .help("Dismiss notification")
-                    .opacity(session.status == .ready ? 1 : 0)
-                    .disabled(session.status != .ready)
-                    .accessibilityHidden(session.status != .ready)
+                    .help("Dismiss session")
                 }
             }
             if dismissibleSessionIDs.count > 1 {
@@ -216,7 +344,7 @@ private struct OverlayView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, density == .minimal ? 4 : 8)
                     .padding(.vertical, density == .minimal ? 2 : 5)
-                    .help("Dismiss all notifications")
+                    .help("Dismiss all sessions")
                 }
             }
         }

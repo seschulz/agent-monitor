@@ -28,6 +28,12 @@ enum HookConfigurationService {
         return hasSafeCodexNotify(helperURL: helperURL, configURL: paths.codexConfig)
     }
 
+    static func hasManagedInstallation(paths: HookConfigurationPaths = .userDefaults) -> Bool {
+        file(paths.codexHooks, contains: "agent-monitor-helper")
+            || file(paths.claudeSettings, contains: "agent-monitor-helper")
+            || file(paths.codexConfig, contains: markerBegin)
+    }
+
     static func install(helperURL: URL, paths: HookConfigurationPaths = .userDefaults) throws {
         try installJSONHooks(at: paths.codexHooks, helperURL: helperURL, events: codexEvents, subcommand: "codex-hook", addDescription: true)
         try installCodexNotify(at: paths.codexConfig, helperURL: helperURL)
@@ -251,5 +257,36 @@ enum HookConfigurationService {
 
     private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+}
+
+enum StableHelperInstaller {
+    static func install(from source: URL, to destination: URL = AppPaths.helperURL) throws {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: source.path) else {
+            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: source.path])
+        }
+
+        try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if manager.fileExists(atPath: destination.path),
+           manager.contentsEqual(atPath: source.path, andPath: destination.path) {
+            try makeExecutable(destination, using: manager)
+            return
+        }
+
+        let staged = destination.deletingLastPathComponent()
+            .appendingPathComponent(".agent-monitor-helper-\(UUID().uuidString)")
+        defer { try? manager.removeItem(at: staged) }
+        try manager.copyItem(at: source, to: staged)
+        try makeExecutable(staged, using: manager)
+        if manager.fileExists(atPath: destination.path) {
+            _ = try manager.replaceItemAt(destination, withItemAt: staged, backupItemName: nil)
+        } else {
+            try manager.moveItem(at: staged, to: destination)
+        }
+    }
+
+    private static func makeExecutable(_ url: URL, using manager: FileManager) throws {
+        try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 }

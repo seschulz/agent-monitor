@@ -16,6 +16,7 @@ if pgrep -x "Agent Monitor" >/dev/null 2>&1; then
 fi
 
 python3 "$repository_dir/scripts/configure.py" uninstall
+rm -f "$HOME/Library/Application Support/AgentMonitor/bin/agent-monitor-helper"
 mkdir -p "$HOME/.Trash"
 if [[ -d "$destination" ]]; then
     mv "$destination" "$HOME/.Trash/Agent Monitor-$(date +%s).app"

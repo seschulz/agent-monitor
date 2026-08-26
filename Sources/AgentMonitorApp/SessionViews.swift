@@ -549,7 +549,6 @@ struct SessionRow: View {
             HStack(spacing: 3) {
                 Image(systemName: session.status.symbol)
                     .font(.system(size: 11, weight: .semibold))
-                    .symbolEffect(.pulse, options: .repeating, isActive: session.status == .running)
                     .foregroundStyle(session.status.color)
                     .frame(width: 14)
                     .accessibilityLabel(session.status.accessibilityLabel)
@@ -578,7 +577,6 @@ struct SessionRow: View {
         } else {
             HStack(spacing: 10) {
                 Image(systemName: session.status.symbol)
-                    .symbolEffect(.pulse, options: .repeating, isActive: session.status == .running)
                     .foregroundStyle(session.status.color)
                     .frame(width: 20)
                     .accessibilityLabel(session.status.accessibilityLabel)
