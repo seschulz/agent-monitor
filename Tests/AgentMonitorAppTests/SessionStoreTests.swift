@@ -539,6 +539,51 @@ import AgentMonitorShared
 }
 
 @MainActor
+@Test func repeatedSessionStartDoesNotCompleteAnActiveCodexTurn() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = SessionStore(baseDirectory: directory)
+    var completions = 0
+    store.onCompletion = { completions += 1 }
+    let now = Date()
+
+    store.apply(.init(
+        eventType: .userPromptSubmit,
+        occurredAt: now,
+        sessionId: "session",
+        turnId: "turn",
+        cwd: "/tmp/repo",
+        status: .running,
+        terminal: .init(kind: .unknown)
+    ))
+    store.apply(.init(
+        eventType: .sessionStart,
+        occurredAt: now.addingTimeInterval(1),
+        sessionId: "session",
+        cwd: "/tmp/repo",
+        status: .ready,
+        terminal: .init(kind: .unknown)
+    ))
+
+    #expect(store.sessions.first?.status == .running)
+    #expect(store.sessions.first?.completedAt == nil)
+
+    store.apply(.init(
+        eventType: .agentTurnComplete,
+        occurredAt: now.addingTimeInterval(2),
+        sessionId: "session",
+        turnId: "turn",
+        cwd: "/tmp/repo",
+        status: .ready,
+        terminal: .init(kind: .unknown)
+    ))
+
+    #expect(store.sessions.first?.status == .ready)
+    #expect(store.sessions.first?.completedAt == now.addingTimeInterval(2))
+    #expect(completions == 1)
+}
+
+@MainActor
 @Test func completionEmitsOneStatusItemSignal() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let store = SessionStore(baseDirectory: directory)

@@ -6,8 +6,17 @@ build_dir="$repository_dir/build"
 build_product="$build_dir/Build/Products/Release/Agent Monitor.app"
 destination="$HOME/Applications/Agent Monitor.app"
 stable_helper="$HOME/Library/Application Support/AgentMonitor/bin/agent-monitor-helper"
+release_tag=$(git -C "$repository_dir" describe --tags --abbrev=0 2>/dev/null || print "v0.0.0")
+local_version=${AGENT_MONITOR_VERSION:-${release_tag#v}}
 
-xcodebuild -project "$repository_dir/AgentMonitor.xcodeproj" -scheme AgentMonitor -configuration Release -derivedDataPath "$build_dir" build
+xcodebuild \
+    -project "$repository_dir/AgentMonitor.xcodeproj" \
+    -scheme AgentMonitor \
+    -configuration Release \
+    -derivedDataPath "$build_dir" \
+    MARKETING_VERSION="$local_version" \
+    CURRENT_PROJECT_VERSION="$local_version" \
+    build
 mkdir -p "$HOME/Applications"
 
 if pgrep -x "Agent Monitor" >/dev/null 2>&1; then

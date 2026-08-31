@@ -152,6 +152,7 @@ final class SessionStore: ObservableObject {
         // already arrived for this turn.
         if event.provider == .codex, event.eventType == .stop,
            let existing = sessions.first(where: { $0.id == sessionID }),
+           existing.status == .ready,
            existing.completedAt != nil,
            event.turnId == nil || event.turnId == existing.currentTurnId {
             recordDiagnostic(event, previousStatus: previousStatus, outcome: .ignoredCompletedTurn)
@@ -159,6 +160,7 @@ final class SessionStore: ObservableObject {
         }
         if Self.isCompletion(event),
            let existing = sessions.first(where: { $0.id == sessionID }),
+           existing.status == .ready,
            existing.completedAt != nil,
            event.turnId == nil || event.turnId == existing.currentTurnId {
             recordDiagnostic(event, previousStatus: previousStatus, outcome: .ignoredCompletedTurn)
@@ -173,6 +175,8 @@ final class SessionStore: ObservableObject {
                 || event.eventType == .agentTurnComplete
                 || event.eventType == .stop
             let isNewTurn = advancesTurn && event.turnId != nil && event.turnId != sessions[index].currentTurnId
+            let preservesActiveTurn = event.eventType == .sessionStart
+                && sessions[index].status == .running
             if event.eventType == .userPromptSubmit {
                 sessions[index].dismissedAt = nil
                 sessions[index].completedAt = nil
@@ -180,7 +184,9 @@ final class SessionStore: ObservableObject {
             if advancesTurn {
                 sessions[index].currentTurnId = event.turnId ?? sessions[index].currentTurnId
             }
-            sessions[index].status = event.status
+            if !preservesActiveTurn {
+                sessions[index].status = event.status
+            }
             sessions[index].provider = event.provider
             sessions[index].cwd = event.cwd
             if event.eventType == .sessionStart || event.eventType == .userPromptSubmit {
@@ -194,7 +200,9 @@ final class SessionStore: ObservableObject {
                 sessions[index].completedAt = nil
                 if event.status != .attention { sessions[index].attentionReason = nil }
             }
-            if event.status == .ready { sessions[index].completedAt = event.occurredAt }
+            if event.status == .ready && !preservesActiveTurn {
+                sessions[index].completedAt = event.occurredAt
+            }
         } else {
             sessions.append(SessionRecord(event: event))
         }
