@@ -107,32 +107,49 @@ enum HookInputDecoder {
 }
 
 enum CodexSessionInspector {
+    static func isUserSession(threadID: String, sessionsRoot: URL? = nil) -> Bool {
+        sessionOrigin(threadID: threadID, sessionsRoot: sessionsRoot) == .user
+    }
+
     static func isSubagent(threadID: String, sessionsRoot: URL? = nil) -> Bool {
-        guard threadID.allSatisfy({ $0.isHexDigit || $0 == "-" }) else { return false }
+        sessionOrigin(threadID: threadID, sessionsRoot: sessionsRoot) == .subagent
+    }
+
+    private enum SessionOrigin {
+        case user
+        case subagent
+        case unknown
+    }
+
+    private static func sessionOrigin(threadID: String, sessionsRoot: URL?) -> SessionOrigin {
+        guard threadID.allSatisfy({ $0.isHexDigit || $0 == "-" }) else { return .unknown }
         let root = sessionsRoot ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true)
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
-        ) else { return false }
+        ) else { return .unknown }
         let suffix = "-\(threadID).jsonl"
         for case let url as URL in enumerator where url.lastPathComponent.hasSuffix(suffix) {
-            guard let handle = FileHandle(forReadingAtPath: url.path) else { return false }
+            guard let handle = FileHandle(forReadingAtPath: url.path) else { return .unknown }
             defer { try? handle.close() }
             guard let data = try? handle.read(upToCount: 256 * 1024),
-                  let text = String(data: data, encoding: .utf8) else { return false }
+                  let text = String(data: data, encoding: .utf8) else { return .unknown }
             for line in text.split(separator: "\n").prefix(8) {
                 guard let lineData = line.data(using: .utf8),
                       let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
                       object["type"] as? String == "session_meta",
                       let payload = object["payload"] as? [String: Any],
                       payload["id"] as? String == threadID else { continue }
-                if payload["thread_source"] as? String == "subagent" { return true }
-                return (payload["source"] as? [String: Any])?["subagent"] != nil
+                if payload["thread_source"] as? String == "subagent"
+                    || (payload["source"] as? [String: Any])?["subagent"] != nil {
+                    return .subagent
+                }
+                return .user
             }
-            return false
+            return .unknown
         }
-        return false
+        return .unknown
     }
 }

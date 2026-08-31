@@ -42,7 +42,9 @@ do {
     case "codex-notify":
         guard arguments.count >= 3 else { throw CLIError.missingNotification }
         let event = try HookInputDecoder.decodeCodexNotification(Data(arguments[2].utf8), terminal: HostDetector.detect(provider: .codex))
-        if !CodexSessionInspector.isSubagent(threadID: event.sessionId) { deliver(event) }
+        // Codex can also notify for short-lived internal turns. They have no
+        // transcript and must not become separate completed widget entries.
+        if CodexSessionInspector.isUserSession(threadID: event.sessionId) { deliver(event) }
     case "claude-hook":
         let input = FileHandle.standardInput.readDataToEndOfFile()
         deliver(try HookInputDecoder.decodeClaudeHook(input, terminal: HostDetector.detect(provider: .claude)))

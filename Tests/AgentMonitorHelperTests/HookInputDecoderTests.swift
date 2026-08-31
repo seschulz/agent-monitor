@@ -40,6 +40,7 @@ import AgentMonitorShared
         .write(to: transcript, atomically: true, encoding: .utf8)
 
     #expect(CodexSessionInspector.isSubagent(threadID: threadID, sessionsRoot: root))
+    #expect(!CodexSessionInspector.isUserSession(threadID: threadID, sessionsRoot: root))
 }
 
 @Test func doesNotIdentifyUserCodexThreadAsSubagent() throws {
@@ -52,6 +53,18 @@ import AgentMonitorShared
         .write(to: transcript, atomically: true, encoding: .utf8)
 
     #expect(!CodexSessionInspector.isSubagent(threadID: threadID, sessionsRoot: root))
+    #expect(CodexSessionInspector.isUserSession(threadID: threadID, sessionsRoot: root))
+}
+
+@Test func rejectsCompletionForCodexThreadWithoutTranscript() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    #expect(!CodexSessionInspector.isUserSession(
+        threadID: "019d434e-6032-76b3-b32f-cb4622fecbba",
+        sessionsRoot: root
+    ))
 }
 
 @Test func ignoresClaudeNotifications() throws {
