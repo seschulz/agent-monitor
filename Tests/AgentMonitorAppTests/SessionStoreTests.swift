@@ -199,6 +199,29 @@ import AgentMonitorShared
     #expect(defaults.integer(forKey: "overlayDensityNamingVersion") == 1)
 }
 
+@Test func overlayAppearanceChoosesReadableTextColorScheme() {
+    #expect(OverlayAppearanceStyle.automatic.resolvedColorScheme(
+        customColorHex: "#000000",
+        systemColorScheme: .light
+    ) == .light)
+    #expect(OverlayAppearanceStyle.dark.resolvedColorScheme(
+        customColorHex: "#FFFFFF",
+        systemColorScheme: .light
+    ) == .dark)
+    #expect(OverlayAppearanceStyle.light.resolvedColorScheme(
+        customColorHex: "#000000",
+        systemColorScheme: .dark
+    ) == .light)
+    #expect(OverlayAppearanceStyle.custom.resolvedColorScheme(
+        customColorHex: "#10141C",
+        systemColorScheme: .light
+    ) == .dark)
+    #expect(OverlayAppearanceStyle.custom.resolvedColorScheme(
+        customColorHex: "#F4F6FA",
+        systemColorScheme: .dark
+    ) == .light)
+}
+
 @Test func menuBarDensityOffersThreeIncreasingSizes() {
     #expect(MenuBarDensity.compact.width < MenuBarDensity.standard.width)
     #expect(MenuBarDensity.standard.width < MenuBarDensity.spacious.width)

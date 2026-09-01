@@ -9,6 +9,7 @@ The app shows which project and agent are active, how long each session has been
 - Monitors Codex CLI and Claude Code from the same menu-bar app
 - Shows the project, agent, terminal, state, and elapsed runtime
 - Offers movable floating widgets in Compact, Standard, and Spacious layouts
+- Lets you tune the widget background style, color, opacity, and text contrast
 - Keeps completed sessions visible for a configurable period
 - Supports dismissing one completed session or clearing all of them
 - Can launch automatically at login

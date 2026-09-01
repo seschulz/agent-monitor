@@ -81,6 +81,171 @@ enum OverlayDensity: String, CaseIterable, Identifiable {
     }
 }
 
+enum OverlayAppearanceStyle: String, CaseIterable, Identifiable {
+    case automatic
+    case dark
+    case light
+    case custom
+
+    static let defaultCustomColorHex = "#20242C"
+
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+
+    func resolvedColorScheme(customColorHex: String, systemColorScheme: ColorScheme) -> ColorScheme {
+        switch self {
+        case .automatic: systemColorScheme
+        case .dark: .dark
+        case .light: .light
+        case .custom: Self.isDark(hex: customColorHex) ? .dark : .light
+        }
+    }
+
+    func backgroundColor(customColorHex: String, systemColorScheme: ColorScheme) -> Color {
+        switch self {
+        case .automatic:
+            systemColorScheme == .dark ? .black : .white
+        case .dark:
+            .black
+        case .light:
+            .white
+        case .custom:
+            Self.color(from: customColorHex)
+        }
+    }
+
+    static func color(from hex: String) -> Color {
+        guard let components = rgbComponents(from: hex) else {
+            return color(from: defaultCustomColorHex)
+        }
+        return Color(
+            .sRGB,
+            red: components.red,
+            green: components.green,
+            blue: components.blue,
+            opacity: 1
+        )
+    }
+
+    static func hexString(from color: Color) -> String? {
+        guard let converted = NSColor(color).usingColorSpace(.sRGB) else { return nil }
+        let red = Int((min(max(converted.redComponent, 0), 1) * 255).rounded())
+        let green = Int((min(max(converted.greenComponent, 0), 1) * 255).rounded())
+        let blue = Int((min(max(converted.blueComponent, 0), 1) * 255).rounded())
+        return String(format: "#%02X%02X%02X", red, green, blue)
+    }
+
+    private static func isDark(hex: String) -> Bool {
+        guard let components = rgbComponents(from: hex) else { return true }
+        let luminance = 0.2126 * components.red + 0.7152 * components.green + 0.0722 * components.blue
+        return luminance < 0.55
+    }
+
+    private static func rgbComponents(from hex: String) -> (red: Double, green: Double, blue: Double)? {
+        let value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard value.count == 6, let number = UInt64(value, radix: 16) else { return nil }
+        return (
+            Double((number >> 16) & 0xFF) / 255,
+            Double((number >> 8) & 0xFF) / 255,
+            Double(number & 0xFF) / 255
+        )
+    }
+}
+
+struct OverlayAppearanceBackground: View {
+    let style: OverlayAppearanceStyle
+    let opacity: Double
+    let customColorHex: String
+    let highContrast: Bool
+    @Environment(\.colorScheme) private var systemColorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12)
+        Group {
+            if style == .automatic {
+                shape.fill(.ultraThinMaterial).opacity(clampedOpacity)
+            } else {
+                shape.fill(
+                    style.backgroundColor(
+                        customColorHex: customColorHex,
+                        systemColorScheme: systemColorScheme
+                    ).opacity(clampedOpacity)
+                )
+            }
+        }
+        .overlay(
+            shape.stroke(
+                Color.primary.opacity(borderOpacity),
+                lineWidth: borderWidth
+            )
+        )
+    }
+
+    private var clampedOpacity: Double {
+        min(max(opacity, 0.5), 1)
+    }
+
+    private var borderWidth: CGFloat {
+        switch style {
+        case .dark, .light:
+            highContrast ? 0.75 : 0.5
+        case .automatic, .custom:
+            highContrast ? 1.25 : 1
+        }
+    }
+
+    private var borderOpacity: Double {
+        switch style {
+        case .dark, .light:
+            highContrast ? 0.28 : 0.16
+        case .automatic, .custom:
+            highContrast ? 0.55 : 0.3
+        }
+    }
+}
+
+private struct OverlayAppearancePreview: View {
+    let style: OverlayAppearanceStyle
+    let opacity: Double
+    let customColorHex: String
+    let highContrast: Bool
+    @Environment(\.colorScheme) private var systemColorScheme
+
+    private var effectiveColorScheme: ColorScheme {
+        style.resolvedColorScheme(
+            customColorHex: customColorHex,
+            systemColorScheme: systemColorScheme
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Example project")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Ready · Codex · Terminal")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .contrast(highContrast ? 1.2 : 1)
+        .background {
+            OverlayAppearanceBackground(
+                style: style,
+                opacity: opacity,
+                customColorHex: customColorHex,
+                highContrast: highContrast
+            )
+        }
+        .environment(\.colorScheme, effectiveColorScheme)
+    }
+}
+
 enum MenuBarDensity: String, CaseIterable, Identifiable {
     case compact
     case standard
@@ -696,12 +861,31 @@ struct SettingsView: View {
     @AppStorage("speechVoice") private var speechVoice = SpeechService.systemDefaultVoice
     @AppStorage("speechCompletionTemplate") private var speechCompletionTemplate = CompletionSpeechTemplate.defaultValue
     @AppStorage("overlayDensity") private var overlayDensity = OverlayDensity.standard.rawValue
+    @AppStorage("overlayAppearanceStyle") private var overlayAppearanceStyle = OverlayAppearanceStyle.automatic.rawValue
+    @AppStorage("overlayBackgroundOpacity") private var overlayBackgroundOpacity = 0.8
+    @AppStorage("overlayCustomColor") private var overlayCustomColor = OverlayAppearanceStyle.defaultCustomColorHex
+    @AppStorage("overlayHighContrast") private var overlayHighContrast = true
     @AppStorage("menuBarDensity") private var menuBarDensity = MenuBarDensity.standard.rawValue
     @AppStorage("showTerminalInMenuBar") private var showTerminalInMenuBar = true
 
     init(runtime: MonitorRuntime) {
         self.runtime = runtime
         _updateService = ObservedObject(wrappedValue: runtime.updateService)
+    }
+
+    private var selectedOverlayAppearance: OverlayAppearanceStyle {
+        OverlayAppearanceStyle(rawValue: overlayAppearanceStyle) ?? .automatic
+    }
+
+    private var overlayCustomColorBinding: Binding<Color> {
+        Binding(
+            get: { OverlayAppearanceStyle.color(from: overlayCustomColor) },
+            set: { color in
+                if let hex = OverlayAppearanceStyle.hexString(from: color) {
+                    overlayCustomColor = hex
+                }
+            }
+        )
     }
 
     var body: some View {
@@ -838,6 +1022,47 @@ struct SettingsView: View {
             )
             .disabled(!overlayEnabled || !showReadyInOverlay)
             .onChange(of: overlayRetentionMinutes) { _, _ in runtime.refreshOverlay() }
+        }
+
+        Section("Widget Appearance") {
+            Text("Choose a background that stays readable over bright and dark windows.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("Background style", selection: $overlayAppearanceStyle) {
+                ForEach(OverlayAppearanceStyle.allCases) { style in
+                    Text(style.label).tag(style.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!overlayEnabled)
+            HStack {
+                Text("Background opacity")
+                Slider(value: $overlayBackgroundOpacity, in: 0.5...1, step: 0.05)
+                Text("\(Int((overlayBackgroundOpacity * 100).rounded()))%")
+                    .monospacedDigit()
+                    .frame(width: 42, alignment: .trailing)
+            }
+            .disabled(!overlayEnabled)
+            if selectedOverlayAppearance == .custom {
+                ColorPicker(
+                    "Background color",
+                    selection: overlayCustomColorBinding,
+                    supportsOpacity: false
+                )
+                .disabled(!overlayEnabled)
+            }
+            Toggle("Increase text contrast", isOn: $overlayHighContrast)
+                .disabled(!overlayEnabled)
+            LabeledContent("Preview") {
+                OverlayAppearancePreview(
+                    style: selectedOverlayAppearance,
+                    opacity: overlayBackgroundOpacity,
+                    customColorHex: overlayCustomColor,
+                    highContrast: overlayHighContrast
+                )
+                .frame(width: 245)
+            }
+            .disabled(!overlayEnabled)
         }
     }
 

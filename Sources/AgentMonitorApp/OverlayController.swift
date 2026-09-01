@@ -290,10 +290,26 @@ final class OverlayController: NSObject, NSWindowDelegate {
 private struct OverlayView: View {
     @ObservedObject var store: SessionStore
     let sessionsDidChange: @MainActor () -> Void
+    @Environment(\.colorScheme) private var systemColorScheme
     @AppStorage("overlayDensity") private var densityRawValue = OverlayDensity.standard.rawValue
+    @AppStorage("overlayAppearanceStyle") private var appearanceRawValue = OverlayAppearanceStyle.automatic.rawValue
+    @AppStorage("overlayBackgroundOpacity") private var backgroundOpacity = 0.8
+    @AppStorage("overlayCustomColor") private var customColorHex = OverlayAppearanceStyle.defaultCustomColorHex
+    @AppStorage("overlayHighContrast") private var highContrast = true
 
     private var density: OverlayDensity {
         OverlayDensity(rawValue: densityRawValue) ?? .standard
+    }
+
+    private var appearance: OverlayAppearanceStyle {
+        OverlayAppearanceStyle(rawValue: appearanceRawValue) ?? .automatic
+    }
+
+    private var effectiveColorScheme: ColorScheme {
+        appearance.resolvedColorScheme(
+            customColorHex: customColorHex,
+            systemColorScheme: systemColorScheme
+        )
     }
 
     private var dismissibleSessionIDs: Set<String> {
@@ -350,7 +366,15 @@ private struct OverlayView: View {
         }
         .padding(density.containerPadding)
         .frame(width: density.width)
-        .background(.ultraThinMaterial.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.3)))
+        .contrast(highContrast ? 1.2 : 1)
+        .background {
+            OverlayAppearanceBackground(
+                style: appearance,
+                opacity: backgroundOpacity,
+                customColorHex: customColorHex,
+                highContrast: highContrast
+            )
+        }
+        .environment(\.colorScheme, effectiveColorScheme)
     }
 }
