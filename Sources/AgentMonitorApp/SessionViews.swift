@@ -3,7 +3,6 @@ import AgentMonitorShared
 import SwiftUI
 
 enum OverlayDensity: String, CaseIterable, Identifiable {
-    case minimal
     case compact
     case standard
     case spacious
@@ -13,56 +12,67 @@ enum OverlayDensity: String, CaseIterable, Identifiable {
 
     var width: CGFloat {
         switch self {
-        case .minimal: 235
-        case .compact: 250
+        case .compact: 235
         case .standard: 280
-        case .spacious: 340
+        case .spacious: 320
         }
     }
 
     var rowPadding: CGFloat {
         switch self {
-        case .minimal: 2
-        case .compact: 5
-        case .standard: 8
-        case .spacious: 12
+        case .compact: 2
+        case .standard: 5
+        case .spacious: 5
         }
     }
 
     var containerPadding: CGFloat {
         switch self {
-        case .minimal: 2
-        case .compact: 4
-        case .standard: 6
-        case .spacious: 10
+        case .compact: 2
+        case .standard: 4
+        case .spacious: 4
         }
     }
 
     var rowSpacing: CGFloat {
         switch self {
-        case .minimal: 0
         case .compact: 0
-        case .standard: 2
-        case .spacious: 5
+        case .standard: 0
+        case .spacious: 2
         }
     }
 
     var titleSize: CGFloat {
         switch self {
-        case .minimal: 10
-        case .compact: 12
-        case .standard: 13
-        case .spacious: 15
+        case .compact: 10
+        case .standard: 12
+        case .spacious: 13
         }
     }
 
     var detailSize: CGFloat {
         switch self {
-        case .minimal: 9
-        case .compact: 10
-        case .standard: 11
-        case .spacious: 12
+        case .compact: 9
+        case .standard: 10
+        case .spacious: 11
         }
+    }
+
+    static func migrateLegacyPreference(in defaults: UserDefaults = .standard) {
+        let migrationKey = "overlayDensityNamingVersion"
+        guard defaults.integer(forKey: migrationKey) < 1 else { return }
+
+        if let legacyValue = defaults.object(forKey: "overlayDensity") as? String {
+            let migratedValue: OverlayDensity
+            switch legacyValue {
+            case "minimal": migratedValue = .compact
+            case "compact": migratedValue = .standard
+            case "standard", "spacious": migratedValue = .spacious
+            default: migratedValue = .standard
+            }
+            defaults.set(migratedValue.rawValue, forKey: "overlayDensity")
+        }
+        defaults.set(1, forKey: migrationKey)
     }
 
     static var current: OverlayDensity {
@@ -545,7 +555,7 @@ struct SessionRow: View {
 
     @ViewBuilder
     private var rowContent: some View {
-        if compact && overlayDensity == .minimal {
+        if compact && overlayDensity == .compact {
             HStack(spacing: 3) {
                 Image(systemName: session.status.symbol)
                     .font(.system(size: 11, weight: .semibold))
@@ -568,7 +578,7 @@ struct SessionRow: View {
                     .lineLimit(1)
                     .frame(width: 34, alignment: .leading)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(Self.minimalTime(for: session, at: context.date))
+                    Text(Self.compactTime(for: session, at: context.date))
                         .font(.system(size: overlayDensity.detailSize, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .frame(width: 24, alignment: .leading)
@@ -581,16 +591,17 @@ struct SessionRow: View {
                     .frame(width: 20)
                     .accessibilityLabel(session.status.accessibilityLabel)
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 3) {
                         Text(session.displayName)
                             .font(.system(size: compact ? overlayDensity.titleSize : menuBarDensity.titleSize, weight: .medium))
                             .lineLimit(1)
+                            .layoutPriority(1)
                         if compact {
-                            Spacer(minLength: 8)
+                            Spacer(minLength: 3)
                             Text("\(session.provider.displayName) · \(session.terminal.displayName)")
                                 .font(.system(size: overlayDensity.detailSize))
                                 .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
+                                .padding(.horizontal, 4)
                                 .padding(.vertical, 2)
                                 .background(.secondary.opacity(0.12), in: Capsule())
                                 .lineLimit(1)
@@ -644,7 +655,7 @@ struct SessionRow: View {
         return String(format: "%d:%02d", minutes, seconds)
     }
 
-    nonisolated static func minimalTime(for session: SessionRecord, at date: Date) -> String {
+    nonisolated static func compactTime(for session: SessionRecord, at date: Date) -> String {
         let referenceDate = session.status == .running ? session.startedAt : session.updatedAt
         let seconds = max(0, Int(date.timeIntervalSince(referenceDate)))
         if seconds < 60 { return "\(seconds)s" }

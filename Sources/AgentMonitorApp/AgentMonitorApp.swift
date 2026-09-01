@@ -24,6 +24,7 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        OverlayDensity.migrateLegacyPreference()
         NSApplication.shared.setActivationPolicy(.accessory)
         configureStatusItem()
         configureMenuPanel()

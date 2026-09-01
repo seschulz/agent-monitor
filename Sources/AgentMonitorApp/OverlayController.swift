@@ -319,20 +319,20 @@ private struct OverlayView: View {
                             .accessibilityLabel("Dismiss \(session.displayName)")
                     }
                     .buttonStyle(.plain)
-                    .font(density == .minimal ? .caption2 : .body)
-                    .padding(.trailing, density == .minimal ? 4 : 8)
+                    .font(density == .compact ? .caption2 : .body)
+                    .padding(.trailing, density == .compact ? 4 : 8)
                     .help("Dismiss session")
                 }
             }
             if dismissibleSessionIDs.count > 1 {
-                Divider().padding(.horizontal, density == .minimal ? 4 : 8)
+                Divider().padding(.horizontal, density == .compact ? 4 : 8)
                 HStack {
                     Spacer()
                     Button {
                         store.dismiss(dismissibleSessionIDs)
                         sessionsDidChange()
                     } label: {
-                        if density == .minimal {
+                        if density == .compact {
                             Image(systemName: "xmark.circle")
                                 .accessibilityLabel("Clear All")
                         } else {
@@ -340,10 +340,10 @@ private struct OverlayView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(density == .minimal ? .caption2 : .caption)
+                    .font(density == .compact ? .caption2 : .caption)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, density == .minimal ? 4 : 8)
-                    .padding(.vertical, density == .minimal ? 2 : 5)
+                    .padding(.horizontal, density == .compact ? 4 : 8)
+                    .padding(.vertical, density == .compact ? 2 : 5)
                     .help("Dismiss all sessions")
                 }
             }

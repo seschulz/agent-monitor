@@ -149,7 +149,7 @@ import AgentMonitorShared
     #expect(restored == NSPoint(x: 2_020, y: 1_460))
 }
 
-@Test func minimalOverlayTimeFormatting() {
+@Test func compactOverlayTimeFormatting() {
     let start = Date(timeIntervalSince1970: 1_000)
     let ready = MonitorEvent(
         eventType: .agentTurnComplete,
@@ -161,9 +161,9 @@ import AgentMonitorShared
     )
     let session = SessionRecord(event: ready)
 
-    #expect(SessionRow.minimalTime(for: session, at: start.addingTimeInterval(42)) == "42s")
-    #expect(SessionRow.minimalTime(for: session, at: start.addingTimeInterval(125)) == "2m")
-    #expect(SessionRow.minimalTime(for: session, at: start.addingTimeInterval(7_200)) == "2h")
+    #expect(SessionRow.compactTime(for: session, at: start.addingTimeInterval(42)) == "42s")
+    #expect(SessionRow.compactTime(for: session, at: start.addingTimeInterval(125)) == "2m")
+    #expect(SessionRow.compactTime(for: session, at: start.addingTimeInterval(7_200)) == "2h")
 
     let running = SessionRecord(event: .init(
         eventType: .userPromptSubmit,
@@ -173,18 +173,30 @@ import AgentMonitorShared
         status: .running,
         terminal: .init(kind: .unknown)
     ))
-    #expect(SessionRow.minimalTime(for: running, at: start.addingTimeInterval(42)) == "42s")
-    #expect(SessionRow.minimalTime(for: running, at: start.addingTimeInterval(754)) == "12m")
-    #expect(SessionRow.minimalTime(for: running, at: start.addingTimeInterval(58_119)) == "16h")
+    #expect(SessionRow.compactTime(for: running, at: start.addingTimeInterval(42)) == "42s")
+    #expect(SessionRow.compactTime(for: running, at: start.addingTimeInterval(754)) == "12m")
+    #expect(SessionRow.compactTime(for: running, at: start.addingTimeInterval(58_119)) == "16h")
 }
 
-@Test func overlayDensityOffersFourIncreasingSizes() {
-    #expect(OverlayDensity.allCases == [.minimal, .compact, .standard, .spacious])
-    #expect(OverlayDensity.minimal.width < OverlayDensity.compact.width)
+@Test func overlayDensityOffersThreeIncreasingSizes() {
+    #expect(OverlayDensity.allCases == [.compact, .standard, .spacious])
     #expect(OverlayDensity.compact.width < OverlayDensity.standard.width)
     #expect(OverlayDensity.standard.width < OverlayDensity.spacious.width)
-    #expect(OverlayDensity.minimal.rowPadding < OverlayDensity.compact.rowPadding)
-    #expect(OverlayDensity.compact.rowPadding < OverlayDensity.spacious.rowPadding)
+    #expect(OverlayDensity.compact.rowPadding < OverlayDensity.standard.rowPadding)
+    #expect(OverlayDensity.standard.rowPadding == OverlayDensity.spacious.rowPadding)
+}
+
+@Test func legacyMinimalOverlayDensityMigratesToCompact() {
+    let suiteName = "OverlayDensityMigrationTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    defaults.set("minimal", forKey: "overlayDensity")
+    OverlayDensity.migrateLegacyPreference(in: defaults)
+    OverlayDensity.migrateLegacyPreference(in: defaults)
+
+    #expect(defaults.string(forKey: "overlayDensity") == OverlayDensity.compact.rawValue)
+    #expect(defaults.integer(forKey: "overlayDensityNamingVersion") == 1)
 }
 
 @Test func menuBarDensityOffersThreeIncreasingSizes() {
