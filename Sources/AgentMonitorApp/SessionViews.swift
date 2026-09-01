@@ -176,31 +176,46 @@ struct OverlayAppearanceBackground: View {
         }
         .overlay(
             shape.stroke(
-                Color.primary.opacity(borderOpacity),
+                borderColor.opacity(borderOpacity),
                 lineWidth: borderWidth
             )
         )
     }
 
     private var clampedOpacity: Double {
-        min(max(opacity, 0.5), 1)
+        min(max(opacity, 0.3), 1)
     }
 
     private var borderWidth: CGFloat {
         switch style {
-        case .dark, .light:
+        case .dark, .custom:
             highContrast ? 0.75 : 0.5
-        case .automatic, .custom:
+        case .light:
+            highContrast ? 0.6 : 0.4
+        case .automatic:
             highContrast ? 1.25 : 1
         }
     }
 
     private var borderOpacity: Double {
         switch style {
-        case .dark, .light:
+        case .dark:
             highContrast ? 0.28 : 0.16
-        case .automatic, .custom:
+        case .light:
+            highContrast ? 0.55 : 0.35
+        case .custom:
+            highContrast ? 0.45 : 0.28
+        case .automatic:
             highContrast ? 0.55 : 0.3
+        }
+    }
+
+    private var borderColor: Color {
+        switch style {
+        case .light, .custom:
+            .white
+        case .automatic, .dark:
+            .primary
         }
     }
 }
@@ -1037,7 +1052,7 @@ struct SettingsView: View {
             .disabled(!overlayEnabled)
             HStack {
                 Text("Background opacity")
-                Slider(value: $overlayBackgroundOpacity, in: 0.5...1, step: 0.05)
+                Slider(value: $overlayBackgroundOpacity, in: 0.3...1, step: 0.05)
                 Text("\(Int((overlayBackgroundOpacity * 100).rounded()))%")
                     .monospacedDigit()
                     .frame(width: 42, alignment: .trailing)
