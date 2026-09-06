@@ -34,6 +34,7 @@ final class MonitorRuntime: ObservableObject {
             "overlayHighContrast": true,
             "menuBarDensity": MenuBarDensity.standard.rawValue,
             "showTerminalInMenuBar": true,
+            "intellijTabSwitchingEnabled": true,
             "readyRetentionMinutes": 15,
             "speechEnabled": false,
             "speakOnCompletion": true,

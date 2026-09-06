@@ -4,6 +4,51 @@ import Testing
 import AgentMonitorShared
 @testable import AgentMonitorApp
 
+@Test @MainActor func automaticTerminalMarkerFitsIntelliJTitleLimit() {
+    let marker = JetBrainsTerminalFocus.makeTitleMarker()
+    #expect(marker.count <= 30)
+    #expect(marker.count >= 20)
+    #expect(marker != JetBrainsTerminalFocus.makeTitleMarker())
+    #expect(marker.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) })
+}
+
+@Test @MainActor func intellijProjectMatchingRespectsPathBoundaries() {
+    #expect(JetBrainsTerminalFocus.containsWorkingDirectory(windowKey: "/work/project", cwd: "/work/project/src"))
+    #expect(JetBrainsTerminalFocus.containsWorkingDirectory(windowKey: "/work/project", cwd: "/work/project"))
+    #expect(!JetBrainsTerminalFocus.containsWorkingDirectory(windowKey: "/work/project", cwd: "/work/project-other"))
+    #expect(!JetBrainsTerminalFocus.containsWorkingDirectory(windowKey: "project", cwd: "/work/project"))
+}
+
+@Test func intellijTabLinkMatchesProjectAndNameInsteadOfTabOrder() {
+    let tabs: [JetBrainsTabIdentity] = [
+        .init(windowKey: "~/other", tabName: "Agent"),
+        .init(windowKey: "~/project", tabName: "Build"),
+        .init(windowKey: "~/project", tabName: "Agent")
+    ]
+    #expect(JetBrainsTabLink.uniqueMatch(windowKey: "~/project", tabName: "Agent", in: tabs) == 2)
+    #expect(JetBrainsTabLink.uniqueMatch(windowKey: "~/project", tabName: "Agent", in: tabs.reversed()) == 0)
+    #expect(JetBrainsTabLink.uniqueMatch(windowKey: "~/project", tabName: "agent", in: tabs) == nil)
+    #expect(JetBrainsTabLink.uniqueMatch(windowKey: "~/missing", tabName: "Agent", in: tabs) == nil)
+}
+
+@Test func intellijTabLinkRejectsAmbiguousOrRenamedTabs() {
+    let duplicates = [JetBrainsTabIdentity(windowKey: "project", tabName: "Local"),
+                      JetBrainsTabIdentity(windowKey: "project", tabName: "Local")]
+    #expect(JetBrainsTabLink.uniqueMatch(windowKey: "project", tabName: "Local", in: duplicates) == nil)
+    #expect(JetBrainsTabLink.uniqueMatch(windowKey: "project", tabName: "Old name", in: duplicates) == nil)
+}
+
+@Test func intellijTabLinkDoesNotSurviveIDEProcessReuse() throws {
+    let startedAt = Date(timeIntervalSince1970: 1000)
+    let link = JetBrainsTabLink(windowKey: "project", tabName: "Agent", hostPID: 42,
+                               hostStartedAt: startedAt, savedAt: startedAt)
+    #expect(link.belongsTo(pid: 42, startedAt: startedAt.addingTimeInterval(0.5)))
+    #expect(!link.belongsTo(pid: 43, startedAt: startedAt))
+    #expect(!link.belongsTo(pid: 42, startedAt: startedAt.addingTimeInterval(10)))
+    let restored = try JSONDecoder().decode(JetBrainsTabLink.self, from: JSONEncoder().encode(link))
+    #expect(restored == link)
+}
+
 @Test func nativeIntegrationSetupPreservesExistingHooksAndNotifyCommand() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

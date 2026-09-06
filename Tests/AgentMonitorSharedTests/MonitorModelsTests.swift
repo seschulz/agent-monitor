@@ -2,6 +2,45 @@ import Foundation
 import Testing
 @testable import AgentMonitorShared
 
+@Test func kernelProcessIdentityDoesNotRequireApplicationLaunchMetadata() throws {
+    let pid = ProcessInfo.processInfo.processIdentifier
+    let startedAt = try #require(ProcessIdentity.startedAt(pid: pid))
+    #expect(startedAt <= Date())
+    #expect(ProcessIdentity.startedAt(pid: pid) == startedAt)
+    #expect(ProcessIdentity.startedAt(pid: -1) == nil)
+    #expect(ProcessIdentity.startedAt(pid: 0) == nil)
+}
+
+@Test func terminalIdentityIsSharedAcrossAgentSessionsButNotReusedShells() {
+    let original = TerminalShellIdentity(pid: 123, startedAt: Date(timeIntervalSince1970: 1000), tty: "/dev/ttys012")
+    let same = TerminalShellIdentity(pid: 123, startedAt: Date(timeIntervalSince1970: 1000), tty: "/dev/ttys012")
+    let replacement = TerminalShellIdentity(pid: 123, startedAt: Date(timeIntervalSince1970: 2000), tty: "/dev/ttys012")
+    let otherTab = TerminalShellIdentity(pid: 124, startedAt: Date(timeIntervalSince1970: 1000), tty: "/dev/ttys013")
+    #expect(original.key == same.key)
+    #expect(original.matches(same))
+    #expect(!original.matches(replacement))
+    #expect(!original.matches(otherTab))
+    #expect(original.key != replacement.key)
+}
+
+@Test func terminalDeviceValidationRejectsAliasesAndNonDevices() {
+    #expect(TerminalShellIdentity.isConcreteTTY("/dev/ttys012"))
+    for path in ["/dev/tty", "/dev/ttys", "/dev/ttys012/../tty", "/tmp/ttys012", "/dev/ttys012\n", "/dev/null"] {
+        #expect(!TerminalShellIdentity.isConcreteTTY(path))
+    }
+    #expect(TerminalShellIdentity.read(pid: -1) == nil)
+}
+
+@Test func terminalHostDecodesOldEventsAndRoundTripsShellIdentity() throws {
+    let legacy = try JSONDecoder.monitorDecoder.decode(TerminalHost.self, from: Data(#"{"kind":"intellij","tty":"/dev/tty"}"#.utf8))
+    #expect(legacy.shell == nil)
+    let shell = TerminalShellIdentity(pid: 123, startedAt: Date(timeIntervalSince1970: 1000), tty: "/dev/ttys012")
+    for kind in [TerminalKind.intellij, .rider, .vscode] {
+        let host = TerminalHost(kind: kind, tty: shell.tty, shell: shell)
+        #expect(try JSONDecoder.monitorDecoder.decode(TerminalHost.self, from: JSONEncoder.monitorEncoder.encode(host)) == host)
+    }
+}
+
 @Test func eventRoundTrips() throws {
     let event = MonitorEvent(
         provider: .claude,

@@ -322,7 +322,7 @@ private struct OverlayView: View {
                 HStack(spacing: 0) {
                     SessionRow(session: session, compact: true) {
                         Task {
-                            do { try await TerminalFocusService.focus(session.terminal) }
+                            do { try await TerminalFocusService.focus(session) }
                             catch { store.showMessage(error.localizedDescription) }
                         }
                     }

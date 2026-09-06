@@ -3,16 +3,16 @@ import Foundation
 import AgentMonitorShared
 
 enum HostDetector {
-    private struct ProcessRow {
+    struct ProcessRow {
         let pid: Int32
         let parentPID: Int32
         let startedAt: Date?
         let command: String
+        var executablePath: String? = nil
     }
 
     static func detect(provider: AgentProvider?) -> TerminalHost {
         let parentPID = getppid()
-        let tty = controllingTTY()
         let environmentBundleID = ProcessInfo.processInfo.environment["__CFBundleIdentifier"]
         let chain = processChain(from: parentPID)
         let agentPID = chain.first(where: { row in
@@ -23,13 +23,17 @@ enum HostDetector {
             }
         })?.pid
         let classified = classify(chain: chain, environmentBundleID: environmentBundleID)
+        let terminalShell = chain.reversed().first(where: { isShellCommand($0.command) })
+            .flatMap { TerminalShellIdentity.read(pid: $0.pid) }
+        let tty = terminalShell?.tty ?? TerminalShellIdentity.read(pid: parentPID)?.tty ?? controllingTTY()
         return TerminalHost(
             kind: classified.kind,
             bundleIdentifier: classified.bundleID ?? environmentBundleID,
             hostPid: classified.pid,
             agentPid: agentPID,
             tty: tty,
-            processStartedAt: classified.startedAt
+            processStartedAt: classified.startedAt,
+            shell: terminalShell
         )
     }
 
@@ -49,12 +53,19 @@ enum HostDetector {
         }
     }
 
+    static func isShellCommand(_ command: String) -> Bool {
+        guard let executable = command.split(whereSeparator: { $0.isWhitespace }).first else { return false }
+        let name = URL(fileURLWithPath: String(executable)).lastPathComponent.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return ["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh"].contains(name)
+    }
+
     private static func controllingTTY() -> String? {
         let descriptor = open("/dev/tty", O_RDONLY | O_NOCTTY)
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
         guard let name = ttyname(descriptor) else { return nil }
-        return String(cString: name)
+        let path = String(cString: name)
+        return TerminalShellIdentity.isConcreteTTY(path) ? path : nil
     }
 
     private static func processChain(from startPID: Int32) -> [ProcessRow] {
@@ -85,10 +96,40 @@ enum HostDetector {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
-        return ProcessRow(pid: pid, parentPID: parent, startedAt: formatter.date(from: timestamp), command: parts[6...].joined(separator: " "))
+        // PROC_PIDPATHINFO_MAXSIZE expands to 4 * MAXPATHLEN in libproc;
+        // Swift does not import that expression macro.
+        var pathBuffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let pathLength = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
+        let executablePath = pathLength > 0
+            ? String(decoding: pathBuffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            : nil
+        return ProcessRow(pid: pid, parentPID: parent, startedAt: formatter.date(from: timestamp),
+                          command: parts[6...].joined(separator: " "), executablePath: executablePath)
     }
 
-    private static func classify(chain: [ProcessRow], environmentBundleID: String?) -> (kind: TerminalKind, bundleID: String?, pid: Int32?, startedAt: Date?) {
+    static func classify(chain: [ProcessRow], environmentBundleID: String?) -> (kind: TerminalKind, bundleID: String?, pid: Int32?, startedAt: Date?) {
+        // Prefer actual IDE executables over inherited bundle IDs and command
+        // arguments. Rider also spawns backend and browser helper processes.
+        for row in chain {
+            guard let path = row.executablePath else { continue }
+            let executable = URL(fileURLWithPath: path)
+            let macOS = executable.deletingLastPathComponent()
+            let contents = macOS.deletingLastPathComponent()
+            guard macOS.lastPathComponent == "MacOS", contents.lastPathComponent == "Contents",
+                  contents.deletingLastPathComponent().pathExtension == "app" else { continue }
+            let arguments = row.command.hasPrefix(path)
+                ? row.command.dropFirst(path.count).split(whereSeparator: { $0.isWhitespace })
+                : row.command.split(whereSeparator: { $0.isWhitespace }).dropFirst().map { $0 }
+            guard arguments.first != "stdioMcpServer" else { continue }
+            if let bundleID = codeEditorBundleIdentifier(executable: executable) {
+                return (.vscode, bundleID, row.pid, row.startedAt)
+            }
+            switch executable.lastPathComponent {
+            case "rider": return (.rider, "com.jetbrains.rider", row.pid, row.startedAt)
+            case "idea": return (.intellij, "com.jetbrains.intellij", row.pid, row.startedAt)
+            default: continue
+            }
+        }
         let candidates: [(TerminalKind, String, [String])] = [
             (.intellij, "com.jetbrains.intellij", ["IntelliJ IDEA", "idea"]),
             (.iTerm2, "com.googlecode.iterm2", ["iTerm2", "iTerm.app"]),
@@ -111,5 +152,25 @@ enum HostDetector {
             return (candidate.0, candidate.1, chain.last?.pid, chain.last?.startedAt)
         }
         return (.unknown, environmentBundleID, chain.last?.pid, chain.last?.startedAt)
+    }
+
+    /// Recognize the shared desktop workbench, not a fixed list of fork names.
+    /// Only the bundle's main executable qualifies; Electron helpers do not.
+    static func codeEditorBundleIdentifier(executable: URL) -> String? {
+        let macOS = executable.deletingLastPathComponent()
+        let contents = macOS.deletingLastPathComponent()
+        guard macOS.lastPathComponent == "MacOS", contents.lastPathComponent == "Contents",
+              contents.deletingLastPathComponent().pathExtension == "app",
+              let infoData = try? Data(contentsOf: contents.appendingPathComponent("Info.plist")),
+              let info = try? PropertyListSerialization.propertyList(from: infoData, format: nil) as? [String: Any],
+              info["CFBundleExecutable"] as? String == executable.lastPathComponent,
+              let bundleID = info["CFBundleIdentifier"] as? String, !bundleID.isEmpty else { return nil }
+        let resources = contents.appendingPathComponent("Resources/app")
+        guard FileManager.default.fileExists(atPath: resources.appendingPathComponent("out/vs/workbench").path),
+              let data = try? Data(contentsOf: resources.appendingPathComponent("product.json")),
+              let product = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = product["applicationName"] as? String, !name.isEmpty,
+              let protocolName = product["urlProtocol"] as? String, !protocolName.isEmpty else { return nil }
+        return bundleID
     }
 }

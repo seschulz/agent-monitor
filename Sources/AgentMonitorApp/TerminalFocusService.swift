@@ -4,6 +4,18 @@ import Foundation
 
 enum TerminalFocusService {
     @MainActor
+    static func focus(_ session: SessionRecord) async throws {
+        guard session.terminal.kind.isJetBrains else {
+            try await focus(session.terminal)
+            return
+        }
+        try? await reopen(session.terminal)
+        try await activate(session.terminal)
+        do { try await JetBrainsTerminalFocus.focus(session) }
+        catch { JetBrainsTerminalFocus.showFailure(error) }
+    }
+
+    @MainActor
     static func focus(_ host: TerminalHost) async throws {
         // A running application can report as active while all of its windows
         // are minimized. A standard reopen event restores those windows and,
@@ -15,7 +27,7 @@ enum TerminalFocusService {
             try runAppleScript(terminalScript(tty: host.tty))
         case .iTerm2:
             try runAppleScript(iTermScript(tty: host.tty))
-        case .intellij, .ghostty, .unknown:
+        case .intellij, .rider, .vscode, .ghostty, .unknown:
             try await activate(host)
         }
     }
@@ -35,12 +47,12 @@ enum TerminalFocusService {
     }
 
     @MainActor
-    private static func activate(_ host: TerminalHost) async throws {
+    static func activate(_ host: TerminalHost) async throws {
         var candidates: [NSRunningApplication] = []
         if let pid = host.hostPid,
            let application = NSRunningApplication(processIdentifier: pid),
            !application.isTerminated,
-           host.processStartedAt == nil || application.launchDate.map({ abs($0.timeIntervalSince(host.processStartedAt!)) < 2 }) == true {
+           host.processStartedAt == nil || (application.launchDate ?? ProcessIdentity.startedAt(pid: pid)).map({ abs($0.timeIntervalSince(host.processStartedAt!)) < 2 }) == true {
             candidates.append(application)
         }
         if let bundleID = host.bundleIdentifier {
@@ -56,7 +68,7 @@ enum TerminalFocusService {
 
         // Activation can be declined when initiated by a non-activating menu-bar
         // panel. Asking Launch Services to open the existing bundle is a more
-        // forceful fallback and does not create a second IntelliJ instance.
+        // forceful fallback and does not create a second IDE instance.
         if let bundleID = host.bundleIdentifier,
            let applicationURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
             let configuration = NSWorkspace.OpenConfiguration()

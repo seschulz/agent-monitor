@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import ApplicationServices
 import AgentMonitorShared
 import SwiftUI
 
@@ -453,8 +454,12 @@ struct MenuContentView: View {
 
     private func focus(_ session: SessionRecord) {
         Task {
-            do { try await TerminalFocusService.focus(session.terminal) }
+            do { try await TerminalFocusService.focus(session) }
             catch {
+                if session.terminal.kind.isJetBrains {
+                    store.showMessage(error.localizedDescription)
+                    return
+                }
                 if let bundleID = session.terminal.bundleIdentifier,
                    let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
                     app.activate(options: [.activateAllWindows])
@@ -866,6 +871,8 @@ struct SettingsView: View {
     @ObservedObject var runtime: MonitorRuntime
     @ObservedObject private var updateService: UpdateService
     @State private var selectedPane = SettingsPane.general
+    @State private var accessibilityGranted = AXIsProcessTrusted()
+    @AppStorage("intellijTabSwitchingEnabled") private var intellijTabSwitchingEnabled = true
     @AppStorage("overlayEnabled") private var overlayEnabled = true
     @AppStorage("notificationsEnabled") private var notificationsEnabled = false
     @AppStorage("readyRetentionMinutes") private var readyRetentionMinutes = 15
@@ -923,6 +930,10 @@ struct SettingsView: View {
             .formStyle(.grouped)
         }
         .frame(minWidth: 560, idealWidth: 620, minHeight: 520, idealHeight: 640)
+        .onAppear { accessibilityGranted = AXIsProcessTrusted() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            accessibilityGranted = AXIsProcessTrusted()
+        }
     }
 
     @ViewBuilder
@@ -977,6 +988,33 @@ struct SettingsView: View {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+
+        Section("Terminal Navigation") {
+            Toggle("Switch to the agent’s IDE terminal tab", isOn: $intellijTabSwitchingEnabled)
+            Text("Uses Accessibility access to select the connected tab in IntelliJ IDEA and Rider when you click a session.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !intellijTabSwitchingEnabled {
+                Text("Clicks open the IDE without changing terminal tabs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if accessibilityGranted {
+                Label("Accessibility access enabled", systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Accessibility access is off. Clicks still open the IDE, without selecting a tab or showing a permission prompt.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Open Accessibility Settings…") {
+                    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                    accessibilityGranted = AXIsProcessTrustedWithOptions(options)
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
         }
 
@@ -1218,7 +1256,8 @@ extension TerminalHost {
         case .iTerm2: "iTerm2"
         case .ghostty: "Ghostty"
         case .intellij: "IntelliJ"
-        case .unknown:
+        case .rider: "Rider"
+        case .vscode, .unknown:
             ApplicationNameResolver.name(hostPID: hostPid, bundleIdentifier: bundleIdentifier)
                 ?? bundleIdentifier
                 ?? "Unknown terminal"

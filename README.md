@@ -15,7 +15,7 @@ The app shows which project and agent are active, how long each session has been
 - Can launch automatically at login
 - Uses Sparkle to check, verify, and install GitHub Releases automatically or on demand
 - Provides optional macOS notifications and spoken completion alerts
-- Recognizes Terminal, iTerm2, Ghostty, IntelliJ terminals, and other macOS terminal hosts when their application metadata is available
+- Recognizes Terminal, iTerm2, Ghostty, IntelliJ IDEA, Rider, and other macOS terminal hosts when their application metadata is available
 - Stores session metadata locally and does not record prompts, responses, commands, or environment variables
 
 ## Requirements
@@ -64,6 +64,26 @@ The menu-bar icon opens the session list. A rotating blue symbol means a session
 
 Settings are grouped by surface. **Menu Bar** controls the menu opened from the status icon. **Floating Overlay** controls widget visibility, density, and how long completed sessions remain visible. Claude Code speech is triggered only by its `Stop` event.
 
+### JetBrains terminal tabs
+
+Agent Monitor can identify and select IntelliJ IDEA and Rider terminal tabs automatically without an IDE plugin:
+
+1. In **Settings → General → Terminal Navigation**, enable **Switch to the agent’s IDE terminal tab**. Grant Accessibility access using the settings button if you want exact tab selection.
+2. Start an agent after installing the updated integrations, so its hook records the real terminal device and shell identity.
+3. Click the agent session in the widget or menu. Agent Monitor briefly applies a unique terminal-title marker, identifies the corresponding tab, restores its original title, and selects it. It does not type commands into the terminal.
+
+The toggle is enabled by default to preserve existing tab-switching behavior. Turn it off to open the IDE without selecting a terminal tab. Missing Accessibility permission also falls back to opening the IDE; session clicks never show a permission prompt. Agent monitoring does not require this permission.
+
+New agent sessions in fresh terminal tabs are identified automatically when the IDE honors terminal-title control sequences. This also distinguishes tabs with identical displayed names. If a custom tab name, an idle shell prompt, or an unsupported terminal engine prevents identification, Agent Monitor uses a previously remembered unique tab when available. Otherwise it simply brings the IDE forward, without a linking dialog. Automatic identification was verified with a foreground process running, as it is while an agent is active.
+
+Local ad-hoc-signed rebuilds can invalidate macOS's Accessibility approval. If exact tab selection stops working after installing a rebuilt app, check its permission status under Terminal Navigation and refresh the installed app’s entry in Accessibility settings.
+
+The IntelliJ/Rider title probe verifies that the original shell is still alive inside the recorded IDE instance before writing to its terminal device. Closed shells and reused process IDs are rejected. Older sessions without shell metadata use an existing unique association when available; otherwise only the IDE is brought forward. Agent Monitor reads window and tab labels, not terminal output.
+
+### VS Code and compatible forks
+
+Clicking a session opens its editor. Exact terminal-tab switching is not supported for VS Code or its forks, and opening the editor does not require Accessibility access. Desktop forks are recognized from their application bundle and shared workbench layout.
+
 Agent Monitor uses the open-source Sparkle framework to check GitHub Releases once per day. When a newer version is available, choose **Install Update**, **Remind Me Later**, or **Skip This Version**. You can also check immediately under **Settings → Updates**. Every update archive is verified with Agent Monitor's Ed25519 signing key before installation. The first installation still requires the Control-click step described above, but later updates are installed from inside the app.
 
 ## Privacy and local data
@@ -97,8 +117,8 @@ To preview configuration changes first, append `--dry-run`. The first attempt to
 
 Current terminal-focus limitations:
 
-- IntelliJ can be restored and brought forward, but Agent Monitor cannot select an exact embedded terminal tab.
-- Ghostty currently supports application activation rather than exact tab selection.
+- Exact IntelliJ IDEA and Rider tab selection requires the Terminal Navigation toggle and Accessibility access. If automatic selection is unavailable and no remembered unique tab can be found, only the IDE is brought forward; see **JetBrains terminal tabs** above.
+- VS Code, its forks, and Ghostty support application activation rather than exact tab selection.
 - `tmux` and `screen` can hide the original GUI terminal TTY.
 
 ## Uninstall
