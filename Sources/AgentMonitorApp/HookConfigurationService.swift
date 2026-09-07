@@ -16,16 +16,27 @@ struct HookConfigurationPaths {
 }
 
 enum HookConfigurationService {
-    static let codexEvents = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
-    static let claudeEvents = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
+    static let codexEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Interrupt", "SessionEnd"]
+    static let claudeEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Notification", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"]
     static let markerBegin = "# BEGIN Agent Monitor"
     static let markerEnd = "# END Agent Monitor"
 
     static func isInstalled(helperURL: URL, paths: HookConfigurationPaths = .userDefaults) -> Bool {
         let helper = helperURL.path
         guard file(paths.codexHooks, contains: helper),
-              file(paths.claudeSettings, contains: helper) else { return false }
+              file(paths.claudeSettings, contains: helper),
+              hasHooks(at: paths.codexHooks, events: codexEvents, helper: helper),
+              hasHooks(at: paths.claudeSettings, events: claudeEvents, helper: helper) else { return false }
         return hasSafeCodexNotify(helperURL: helperURL, configURL: paths.codexConfig)
+    }
+
+    private static func hasHooks(at url: URL, events: [String], helper: String) -> Bool {
+        guard let document = try? readJSONObject(at: url), let hooks = document["hooks"] as? [String: [[String: Any]]] else { return false }
+        return events.allSatisfy { event in
+            (hooks[event] ?? []).contains { entry in
+                (entry["hooks"] as? [[String: Any]] ?? []).contains { ($0["command"] as? String)?.contains(helper) == true }
+            }
+        }
     }
 
     static func hasManagedInstallation(paths: HookConfigurationPaths = .userDefaults) -> Bool {
@@ -52,12 +63,13 @@ enum HookConfigurationService {
         removeMonitorEntries(from: &hooks)
         for event in events {
             var entries = hooks[event] as? [[String: Any]] ?? []
-            var command: [String: Any] = [
+            let command: [String: Any] = [
                 "type": "command",
                 "command": "\(shellQuote(helperURL.path)) \(subcommand)",
                 "timeout": 3
             ]
-            entries.append(["matcher": "", "hooks": [command]])
+            let matcher = event == "PreToolUse" ? (subcommand == "codex-hook" ? "request_user_input" : "AskUserQuestion") : event == "Notification" ? "permission_prompt" : ""
+            entries.append(["matcher": matcher, "hooks": [command]])
             hooks[event] = entries
         }
         document["hooks"] = hooks

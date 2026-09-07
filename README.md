@@ -14,7 +14,7 @@ The app shows which project and agent are active, how long each session has been
 - Supports dismissing one completed session or clearing all of them
 - Can launch automatically at login
 - Uses Sparkle to check, verify, and install GitHub Releases automatically or on demand
-- Provides optional macOS notifications and spoken completion alerts
+- Provides optional macOS notifications and spoken attention and completion alerts
 - Recognizes Terminal, iTerm2, Ghostty, IntelliJ IDEA, Rider, and other macOS terminal hosts when their application metadata is available
 - Stores session metadata locally and does not record prompts, responses, commands, or environment variables
 
@@ -59,10 +59,23 @@ The menu-bar icon opens the session list. A rotating blue symbol means a session
 - Use the X beside a completed session to dismiss it.
 - Use **Clear All** when several completed sessions are visible.
 - Drag the floating overlay to place it elsewhere on the desktop.
-- Open **Settings** from the menu for launch-at-login, menu density, overlay behavior, retention times, macOS alerts, and finished voice alerts. The spoken completion message can use `{agent}`, `{project}`, `{terminal}`, and `{directory}` placeholders.
+- Open **Settings** from the menu. **General** contains startup, updates, and local history; **Integrations** contains agent hooks and terminal navigation; **Alerts & Voice** contains per-trigger delivery and messages; **Appearance** contains menu-bar and widget options.
 - If the menu bar is too crowded to reach the icon, reopen **Agent Monitor** from Spotlight or Finder to bring Settings to the foreground.
 
-Settings are grouped by surface. **Menu Bar** controls the menu opened from the status icon. **Floating Overlay** controls widget visibility, density, and how long completed sessions remain visible. Claude Code speech is triggered only by its `Stop` event.
+**Appearance** groups the menu-bar and floating-widget controls, including visibility, density, and how long completed sessions remain visible. Claude Code completion alerts are triggered by its `Stop` event.
+
+### Needs attention
+
+When Codex or Claude Code asks for permission or explicitly requests input, the session turns amber and moves above running sessions. Waiting sessions stay in the widget until work resumes, the session ends, or you dismiss them. The menu-bar icon also stays amber while a visible session needs attention.
+
+Under **Settings → Alerts & Voice → Permission**, control permission alerts independently for **Codex** (off by default) and **Claude Code** (on by default). Turning an agent off suppresses permission speech, macOS notifications, and attention indicators, including existing permission indicators. Questions that need your input and completion alerts still follow their usual settings. The separate agent defaults replace the earlier global permission switch; subsequent per-agent choices are preserved.
+
+- Permission hooks show **Waiting for permission**.
+- Codex's `request_user_input` and Claude Code's `AskUserQuestion` show **Waiting for input**.
+- Answering the prompt returns the session to running; completion clears the waiting state. Repeated reminders do not send duplicate alerts, and a matching tool-call ID prevents unrelated parallel tools from clearing a pending question.
+- Under **Settings → Alerts & Voice**, select **Finished**, **Needs input**, or **Permission** to configure macOS notifications and speech independently for each trigger. All three have editable spoken messages with `{agent}`, `{project}`, `{terminal}`, and `{directory}` placeholders, a live text preview for either agent, voice playback, and a reset button. Blank messages use the selected trigger’s default. Existing voice, completion message, and delivery preferences are preserved. Pending questions take priority over overlapping finish events; completion is announced after the answer and a subsequent finish event.
+
+Start new CLI sessions after updating so they load the new hooks. Codex may ask you to review the added hooks. Detection uses explicit agent signals, not inactivity or guesses from an agent's response. Claude's ordinary idle reminders are ignored. Hook support depends on the agent version and tool path; prompt text, questions, commands, and tool arguments are not included in monitor events.
 
 ### JetBrains terminal tabs
 

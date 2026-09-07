@@ -18,8 +18,8 @@ try:
 except ModuleNotFoundError:
     tomllib = None
 
-CODEX_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
-CLAUDE_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
+CODEX_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Interrupt", "SessionEnd"]
+CLAUDE_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Notification", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"]
 DESCRIPTION = "Report agent session state to Agent Monitor"
 BEGIN = "# BEGIN Agent Monitor"
 END = "# END Agent Monitor"
@@ -35,7 +35,8 @@ def backup(path: Path) -> None:
 def hook_entry(helper: Path, event: str, subcommand: str) -> dict:
     command = f'"{helper}" {subcommand}'
     hook = {"type": "command", "command": command, "timeout": 3}
-    return {"matcher": "", "hooks": [hook]}
+    matcher = ("request_user_input" if subcommand == "codex-hook" else "AskUserQuestion") if event == "PreToolUse" else "permission_prompt" if event == "Notification" else ""
+    return {"matcher": matcher, "hooks": [hook]}
 
 
 def is_monitor_hook(entry: dict) -> bool:

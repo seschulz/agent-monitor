@@ -50,6 +50,10 @@ final class SocketServer: @unchecked Sendable {
     private func acceptConnection() {
         let client = accept(listener, nil, nil)
         guard client >= 0 else { return }
+        // Hooks can exit before reading the acknowledgement. A disconnected
+        // client must not terminate the monitor with SIGPIPE.
+        var noSigPipe: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         queue.async { [handler] in
             defer { close(client) }
             var data = Data()
@@ -68,9 +72,9 @@ final class SocketServer: @unchecked Sendable {
                 let event = try JSONDecoder.monitorDecoder.decode(MonitorEvent.self, from: data)
                 try event.validate()
                 handler(event)
-                _ = Darwin.write(client, "ok\n", 3)
+                _ = Darwin.send(client, "ok\n", 3, MSG_NOSIGNAL)
             } catch {
-                _ = Darwin.write(client, "error\n", 6)
+                _ = Darwin.send(client, "error\n", 6, MSG_NOSIGNAL)
             }
         }
     }

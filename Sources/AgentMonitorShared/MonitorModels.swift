@@ -135,8 +135,10 @@ public enum MonitorEventType: String, Codable, Sendable {
     case userPromptSubmit
     case postToolUse
     case permissionRequested
+    case inputRequested
     case agentTurnComplete
     case stop
+    case interrupt
     case sessionEnd
 }
 
@@ -156,6 +158,7 @@ public struct MonitorEvent: Codable, Equatable, Sendable {
     public var status: SessionStatus
     public var terminal: TerminalHost
     public var toolName: String?
+    public var toolUseID: String?
     public var attentionReason: String?
 
     public init(
@@ -171,6 +174,7 @@ public struct MonitorEvent: Codable, Equatable, Sendable {
         status: SessionStatus,
         terminal: TerminalHost,
         toolName: String? = nil,
+        toolUseID: String? = nil,
         attentionReason: String? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -185,6 +189,7 @@ public struct MonitorEvent: Codable, Equatable, Sendable {
         self.status = status
         self.terminal = terminal
         self.toolName = toolName
+        self.toolUseID = toolUseID
         self.attentionReason = attentionReason
     }
 
@@ -198,6 +203,7 @@ public struct MonitorEvent: Codable, Equatable, Sendable {
               terminal.tty?.count ?? 0 <= 1024,
               terminal.bundleIdentifier?.count ?? 0 <= 512,
               terminal.shell?.tty.count ?? 0 <= 1024,
+              toolUseID?.count ?? 0 <= 512,
               attentionReason?.count ?? 0 <= 1024 else {
             throw MonitorEventError.fieldTooLong
         }
@@ -238,6 +244,7 @@ public struct SessionRecord: Identifiable, Codable, Equatable, Sendable {
     public var completedAt: Date?
     public var attentionReason: String?
     public var dismissedAt: Date?
+    public var attentionToolUseID: String?
 
     public init(event: MonitorEvent) {
         id = event.scopedSessionID
@@ -254,6 +261,7 @@ public struct SessionRecord: Identifiable, Codable, Equatable, Sendable {
         updatedAt = event.occurredAt
         completedAt = event.status == .ready ? event.occurredAt : nil
         attentionReason = event.attentionReason
+        attentionToolUseID = event.status == .attention ? event.toolUseID : nil
         dismissedAt = nil
     }
 

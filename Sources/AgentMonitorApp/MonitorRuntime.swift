@@ -38,8 +38,12 @@ final class MonitorRuntime: ObservableObject {
             "readyRetentionMinutes": 15,
             "speechEnabled": false,
             "speakOnCompletion": true,
+            "speakOnInput": true,
+            "speakOnPermission": true,
+            "codexPermissionAlertsEnabled": false,
+            "claudePermissionAlertsEnabled": true,
             "speechVoice": SpeechService.systemDefaultVoice,
-            "speechCompletionTemplate": CompletionSpeechTemplate.defaultValue
+            "speechCompletionTemplate": SpeechMessageTemplate.defaultValue
         ])
         store.reconcileProcesses()
         startDesktopSessionMonitoring()
@@ -132,11 +136,11 @@ final class MonitorRuntime: ObservableObject {
         )
     }
 
-    func requestNotifications(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "notificationsEnabled")
+    func requestNotifications(_ enabled: Bool, preference: String = "notificationsEnabled") {
+        UserDefaults.standard.set(enabled, forKey: preference)
         guard enabled else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            if !granted { UserDefaults.standard.set(false, forKey: "notificationsEnabled") }
+            if !granted { UserDefaults.standard.set(false, forKey: preference) }
         }
     }
 
@@ -477,7 +481,7 @@ actor CodexDesktopSessionWatcher {
             eventType = .agentTurnComplete
             status = .ready
         case .aborted:
-            eventType = .stop
+            eventType = .interrupt
             status = .stale
         }
         return MonitorEvent(

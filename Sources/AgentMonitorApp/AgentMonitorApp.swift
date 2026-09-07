@@ -12,6 +12,7 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
     private var diagnosticsWindowController: NSWindowController?
     private let diagnosticsWindowState = DiagnosticsWindowState()
     private var completionResetTask: Task<Void, Never>?
+    private var attentionIconVisible = false
     private var localEventMonitor: Any?
     private var globalEventMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
@@ -88,6 +89,7 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateMenuPanelSize()
+                self?.refreshAttentionIcon()
             }
             .store(in: &cancellables)
 
@@ -170,6 +172,10 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
     }
 
     private func showCompletionCheck() {
+        guard !runtime.store.visibleSessions.contains(where: { $0.status == .attention }) else {
+            showNormalIcon()
+            return
+        }
         completionResetTask?.cancel()
         setStatusIcon(named: "checkmark.circle", tint: nil, label: "Agent finished")
         completionResetTask = Task { [weak self] in
@@ -184,7 +190,21 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
     }
 
     private func showNormalIcon() {
+        let count = runtime.store.visibleSessions.filter { $0.status == .attention }.count
+        attentionIconVisible = count > 0
+        if count > 0 {
+            setStatusIcon(named: "exclamationmark.bubble.fill", tint: .systemOrange,
+                          label: "\(count) agent\(count == 1 ? "" : "s") need\(count == 1 ? "s" : "") attention")
+            return
+        }
         setStatusIcon(named: "bubble.left.and.text.bubble.right", tint: nil, label: "Agent Monitor")
+    }
+
+    private func refreshAttentionIcon() {
+        if attentionIconVisible || runtime.store.visibleSessions.contains(where: { $0.status == .attention }) {
+            completionResetTask?.cancel()
+            showNormalIcon()
+        }
     }
 
     private func setStatusIcon(named symbolName: String, tint: NSColor?, label: String) {
@@ -203,7 +223,7 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
         if settingsWindowController == nil {
             let hostingController = NSHostingController(rootView: SettingsView(runtime: runtime))
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 620, height: 640),
+                contentRect: NSRect(x: 0, y: 0, width: 840, height: 780),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
@@ -211,7 +231,7 @@ final class AgentMonitorApp: NSObject, NSApplicationDelegate {
             window.title = "Agent Monitor Settings"
             window.contentViewController = hostingController
             window.isReleasedWhenClosed = false
-            window.minSize = NSSize(width: 560, height: 520)
+            window.minSize = NSSize(width: 780, height: 672)
             window.setFrameAutosaveName("AgentMonitorSettings")
             window.center()
             settingsWindowController = NSWindowController(window: window)

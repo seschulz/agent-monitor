@@ -324,7 +324,7 @@ import AgentMonitorShared
 }
 
 @Test func completionSpeechTemplateExpandsSessionPlaceholders() {
-    let phrase = CompletionSpeechTemplate.render(
+    let phrase = SpeechMessageTemplate.render(
         "{agent} finished {project} in {terminal} at {directory}",
         agent: "Claude",
         project: "agent-monitor",
@@ -335,8 +335,8 @@ import AgentMonitorShared
     #expect(phrase == "Claude finished agent-monitor in Ghostty at /tmp/agent-monitor")
 }
 
-@Test func blankCompletionSpeechTemplateUsesDefaultMessage() {
-    let phrase = CompletionSpeechTemplate.render(
+@Test func blankSpeechMessageTemplateUsesDefaultMessage() {
+    let phrase = SpeechMessageTemplate.render(
         "   ",
         agent: "Codex",
         project: "agent-monitor",
@@ -350,7 +350,8 @@ import AgentMonitorShared
 @MainActor
 @Test func ignoresDuplicatesAndOutOfOrderEvents() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, diagnosticsEnabled: true)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, diagnosticsEnabled: true, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
     let running = MonitorEvent(eventId: "new", eventType: .userPromptSubmit, occurredAt: now, sessionId: "s", turnId: "t", cwd: "/tmp/repo", status: .running, terminal: .init(kind: .unknown))
     store.apply(running)
@@ -383,8 +384,8 @@ import AgentMonitorShared
         toolName: "shell"
     )
 
-    SessionStore(baseDirectory: directory, diagnosticsEnabled: true).apply(event)
-    let reloaded = SessionStore(baseDirectory: directory, diagnosticsEnabled: true)
+    SessionStore(completionAlertDelay: .zero, baseDirectory: directory, diagnosticsEnabled: true, speechOutput: { _, _ in }).apply(event)
+    let reloaded = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, diagnosticsEnabled: true, speechOutput: { _, _ in })
     let entries = reloaded.diagnosticEntries(for: "codex:diagnostic-session")
 
     #expect(entries.count == 1)
@@ -402,7 +403,8 @@ import AgentMonitorShared
 @Test func diagnosticTimelineIsBoundedPerSession() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let store = SessionStore(baseDirectory: directory, diagnosticsEnabled: true)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, diagnosticsEnabled: true, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
 
     for index in 0..<105 {
@@ -434,7 +436,8 @@ import AgentMonitorShared
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: directory)
     }
-    let store = SessionStore(baseDirectory: directory, defaults: defaults, diagnosticsEnabled: true)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, diagnosticsEnabled: true, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
     store.apply(.init(
         eventType: .userPromptSubmit,
@@ -463,7 +466,8 @@ import AgentMonitorShared
 @Test func diagnosticsRemainDisabledWithoutInternalOptIn() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let store = SessionStore(baseDirectory: directory, diagnosticsEnabled: false)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, diagnosticsEnabled: false, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(
         eventType: .sessionStart,
         sessionId: "private",
@@ -526,7 +530,7 @@ import AgentMonitorShared
         changedURLs: [transcript],
         terminal: terminal
     )
-    #expect(interruption.map(\.eventType) == [.userPromptSubmit, .stop])
+    #expect(interruption.map(\.eventType) == [.userPromptSubmit, .interrupt])
     #expect(interruption.map(\.status) == [.running, .stale])
 }
 
@@ -589,7 +593,8 @@ import AgentMonitorShared
 @MainActor
 @Test func menuBarHidesDisconnectedSessions() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(
         eventType: .sessionEnd,
         sessionId: "disconnected",
@@ -612,7 +617,8 @@ import AgentMonitorShared
 @MainActor
 @Test func aNewTurnClearsCompletion() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(eventType: .agentTurnComplete, sessionId: "s", turnId: "one", cwd: "/tmp/repo", status: .ready, terminal: .init(kind: .unknown)))
     store.apply(.init(eventType: .userPromptSubmit, occurredAt: Date().addingTimeInterval(1), sessionId: "s", turnId: "two", cwd: "/tmp/repo", status: .running, terminal: .init(kind: .unknown)))
     #expect(store.sessions.first?.completedAt == nil)
@@ -622,7 +628,8 @@ import AgentMonitorShared
 @Test func repeatedSessionStartDoesNotCompleteAnActiveCodexTurn() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     var completions = 0
     store.onCompletion = { completions += 1 }
     let now = Date()
@@ -666,7 +673,8 @@ import AgentMonitorShared
 @MainActor
 @Test func completionEmitsOneStatusItemSignal() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     var completions = 0
     store.onCompletion = { completions += 1 }
     let now = Date()
@@ -682,7 +690,8 @@ import AgentMonitorShared
 @MainActor
 @Test func codexStopHidesInterruptedSessionWithoutCompleting() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     var completions = 0
     store.onCompletion = { completions += 1 }
     let now = Date()
@@ -703,7 +712,8 @@ import AgentMonitorShared
 @MainActor
 @Test func deadAgentProcessBecomesInactive() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(
         eventType: .userPromptSubmit,
         sessionId: "dead-process",
@@ -725,7 +735,8 @@ import AgentMonitorShared
     defaults.set(true, forKey: "showReadyInOverlay")
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
     let terminal = TerminalHost(kind: .terminalApp, agentPid: .max)
     store.apply(.init(eventType: .userPromptSubmit, occurredAt: now, sessionId: "completed", turnId: "turn-1", cwd: "/tmp/repo", status: .running, terminal: terminal))
@@ -753,7 +764,8 @@ import AgentMonitorShared
     }
 
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(
         eventType: .userPromptSubmit,
         sessionId: "suspended-process",
@@ -774,7 +786,8 @@ import AgentMonitorShared
     let transcript = directory.appendingPathComponent("rollout.jsonl")
     try #"{"timestamp":"2026-08-25T16:44:38Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted"}}"#
         .write(to: transcript, atomically: true, encoding: .utf8)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(
         eventType: .userPromptSubmit,
         sessionId: "interrupted",
@@ -794,7 +807,8 @@ import AgentMonitorShared
 @MainActor
 @Test func lateToolEventCannotReactivateInactiveSession() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
     store.apply(.init(eventType: .userPromptSubmit, occurredAt: now, sessionId: "s", turnId: "root-turn", cwd: "/tmp/repo", status: .running, terminal: .init(kind: .unknown)))
     store.apply(.init(eventType: .stop, occurredAt: now.addingTimeInterval(1), sessionId: "s", turnId: "root-turn", cwd: "/tmp/repo", status: .stale, terminal: .init(kind: .unknown)))
@@ -812,13 +826,14 @@ import AgentMonitorShared
     defaults.set(5, forKey: "overlayRetentionMinutes")
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
     store.apply(.init(eventType: .agentTurnComplete, occurredAt: now, sessionId: "ready", cwd: "/tmp/ready", status: .ready, terminal: .init(kind: .unknown)))
     store.apply(.init(eventType: .permissionRequested, occurredAt: now, sessionId: "attention", cwd: "/tmp/attention", status: .attention, terminal: .init(kind: .unknown)))
 
-    #expect(store.overlaySessions(at: now.addingTimeInterval(299)).count == 1)
-    #expect(store.overlaySessions(at: now.addingTimeInterval(301)).isEmpty)
+    #expect(store.overlaySessions(at: now.addingTimeInterval(299)).count == 2)
+    #expect(store.overlaySessions(at: now.addingTimeInterval(301)).map(\.id) == ["codex:attention"])
 }
 
 @MainActor
@@ -828,7 +843,8 @@ import AgentMonitorShared
     defaults.set(1, forKey: "overlayRetentionMinutes")
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
     store.apply(.init(eventType: .userPromptSubmit, occurredAt: now, sessionId: "running", cwd: "/tmp/running", status: .running, terminal: .init(kind: .unknown)))
 
@@ -843,7 +859,8 @@ import AgentMonitorShared
     defaults.set(15, forKey: "overlayRetentionMinutes")
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(eventType: .agentTurnComplete, sessionId: "done", cwd: "/tmp/done", status: .ready, terminal: .init(kind: .unknown)))
 
     #expect(store.overlaySessions.count == 1)
@@ -857,7 +874,8 @@ import AgentMonitorShared
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
     store.apply(.init(
         eventType: .userPromptSubmit,
@@ -894,13 +912,14 @@ import AgentMonitorShared
 }
 
 @MainActor
-@Test func attentionSessionsAreDiscarded() {
+@Test func attentionSessionsStayVisibleWithoutExpiring() {
     let suite = "AgentMonitorTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defaults.set(15, forKey: "overlayRetentionMinutes")
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(
         eventType: .permissionRequested,
         sessionId: "attention",
@@ -909,8 +928,9 @@ import AgentMonitorShared
         terminal: .init(kind: .unknown)
     ))
 
-    #expect(store.sessions.isEmpty)
-    #expect(store.overlaySessions.isEmpty)
+    #expect(store.sessions.first?.status == .attention)
+    #expect(store.overlaySessions.count == 1)
+    #expect(store.overlaySessions(at: Date().addingTimeInterval(3600)).count == 1)
 }
 
 @MainActor
@@ -921,7 +941,8 @@ import AgentMonitorShared
     defaults.set(15, forKey: "overlayRetentionMinutes")
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(eventType: .agentTurnComplete, sessionId: "done-1", cwd: "/tmp/one", status: .ready, terminal: .init(kind: .unknown)))
     store.apply(.init(eventType: .agentTurnComplete, sessionId: "done-2", cwd: "/tmp/two", status: .ready, terminal: .init(kind: .unknown)))
     store.apply(.init(eventType: .userPromptSubmit, sessionId: "running", cwd: "/tmp/three", status: .running, terminal: .init(kind: .unknown)))
@@ -939,7 +960,8 @@ import AgentMonitorShared
     defaults.set(15, forKey: "overlayRetentionMinutes")
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     let now = Date()
     store.apply(.init(eventType: .agentTurnComplete, occurredAt: now, sessionId: "done", turnId: "turn-1", cwd: "/tmp/done", status: .ready, terminal: .init(kind: .unknown)))
     store.dismiss("codex:done", at: now.addingTimeInterval(1))
@@ -958,7 +980,8 @@ import AgentMonitorShared
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let now = Date()
-    let store = SessionStore(baseDirectory: directory, defaults: defaults)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(eventType: .agentTurnComplete, occurredAt: now, sessionId: "session", turnId: "turn-1", cwd: "/tmp/repo", status: .ready, terminal: .init(kind: .unknown)))
     store.dismiss("codex:session", at: now.addingTimeInterval(1))
 
@@ -976,11 +999,11 @@ import AgentMonitorShared
     defer { defaults.removePersistentDomain(forName: suite) }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let now = Date()
-    let initialStore = SessionStore(baseDirectory: directory, defaults: defaults)
+    let initialStore = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
     initialStore.apply(.init(eventType: .agentTurnComplete, occurredAt: now, sessionId: "done", cwd: "/tmp/done", status: .ready, terminal: .init(kind: .unknown)))
     initialStore.dismiss("codex:done", at: now)
 
-    let reloadedStore = SessionStore(baseDirectory: directory, defaults: defaults)
+    let reloadedStore = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, defaults: defaults, speechOutput: { _, _ in })
 
     #expect(reloadedStore.overlaySessions(at: now.addingTimeInterval(1)).isEmpty)
     #expect(reloadedStore.sessions.first?.dismissedAt != nil)
@@ -989,10 +1012,413 @@ import AgentMonitorShared
 @MainActor
 @Test func codexAndClaudeSessionsWithSameIDRemainDistinct() {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let store = SessionStore(baseDirectory: directory)
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: directory, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
     store.apply(.init(provider: .codex, eventType: .userPromptSubmit, sessionId: "same", cwd: "/tmp/codex", status: .running, terminal: .init(kind: .terminalApp)))
     store.apply(.init(provider: .claude, eventType: .userPromptSubmit, sessionId: "same", cwd: "/tmp/claude", status: .running, terminal: .init(kind: .intellij)))
 
     #expect(Set(store.sessions.map(\.id)) == ["codex:same", "claude:same"])
     #expect(Set(store.sessions.map(\.provider)) == [.codex, .claude])
+}
+
+@MainActor
+@Test func attentionLifecycleAlertsOnceAndResumesForBothProviders() throws {
+    for provider in AgentProvider.allCases {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "AgentMonitorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.set(false, forKey: "showReadyInOverlay")
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = SessionStore(completionAlertDelay: .zero, baseDirectory: root, defaults: defaults, speechOutput: { _, _ in })
+        store.setPermissionAlertsEnabled(true, for: .codex)
+        var alerts = 0
+        store.onAttention = { alerts += 1 }
+        let now = Date()
+        func event(_ type: MonitorEventType, _ status: SessionStatus, seconds: Double, tool: String? = nil) -> MonitorEvent {
+            .init(provider: provider, eventType: type, occurredAt: now.addingTimeInterval(seconds), sessionId: "s", turnId: "t", cwd: "/tmp/test", status: status, terminal: .init(kind: .unknown), toolUseID: tool, attentionReason: status == .attention ? "Waiting for input" : nil)
+        }
+        store.apply(event(.userPromptSubmit, .running, seconds: 0))
+        store.apply(event(.inputRequested, .attention, seconds: 1, tool: "question"))
+        store.apply(event(.inputRequested, .attention, seconds: 2))
+        #expect(alerts == 1)
+        #expect(store.overlaySessions.count == 1)
+        #expect(store.overlaySessions(at: now.addingTimeInterval(3600)).count == 1)
+        #expect(store.sessions.first?.attentionToolUseID == "question")
+        store.apply(.init(provider: provider, eventType: .permissionRequested, occurredAt: now.addingTimeInterval(2), sessionId: "s", turnId: "t", cwd: "/tmp/test", status: .attention, terminal: .init(kind: .unknown), attentionReason: "Waiting for permission"))
+        #expect(store.sessions.first?.attentionReason == "Waiting for input")
+        #expect(alerts == 1)
+        store.apply(event(.postToolUse, .running, seconds: 3, tool: "parallel"))
+        #expect(store.sessions.first?.status == .attention)
+        store.apply(event(.sessionStart, .ready, seconds: 4))
+        #expect(store.sessions.first?.status == .attention)
+        #expect(store.sessions.first?.attentionReason == "Waiting for input")
+        store.apply(event(.postToolUse, .running, seconds: 5, tool: "question"))
+        #expect(store.sessions.first?.status == .running)
+        #expect(store.sessions.first?.attentionReason == nil)
+        #expect(store.sessions.first?.attentionToolUseID == nil)
+        store.apply(event(.permissionRequested, .attention, seconds: 6, tool: "approval"))
+        #expect(alerts == 2)
+        let restored = SessionStore(completionAlertDelay: .zero, baseDirectory: root, defaults: defaults, speechOutput: { _, _ in })
+        #expect(restored.visibleSessions.first?.status == .attention)
+        #expect(restored.visibleSessions.first?.attentionToolUseID == "approval")
+        store.apply(event(.sessionEnd, .closed, seconds: 7))
+        #expect(store.visibleSessions.isEmpty)
+    }
+}
+
+@MainActor
+@Test func attentionRequestsDoNotResurrectFinishedOrOlderTurns() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: root, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
+    var alerts = 0
+    var completions = 0
+    store.onAttention = { alerts += 1 }
+    store.onCompletion = { completions += 1 }
+    let now = Date()
+    store.apply(.init(eventType: .userPromptSubmit, occurredAt: now, sessionId: "s", turnId: "new", cwd: "/tmp/test", status: .running, terminal: .init(kind: .unknown)))
+    store.apply(.init(eventType: .permissionRequested, occurredAt: now.addingTimeInterval(1), sessionId: "s", turnId: "old", cwd: "/tmp/test", status: .attention, terminal: .init(kind: .unknown)))
+    #expect(store.sessions.first?.status == .running)
+    #expect(alerts == 0)
+    store.apply(.init(eventType: .permissionRequested, occurredAt: now.addingTimeInterval(2), sessionId: "s", turnId: "new", cwd: "/tmp/test", status: .attention, terminal: .init(kind: .unknown)))
+    store.apply(.init(eventType: .agentTurnComplete, occurredAt: now.addingTimeInterval(3), sessionId: "s", turnId: "new", cwd: "/tmp/test", status: .ready, terminal: .init(kind: .unknown)))
+    store.apply(.init(eventType: .permissionRequested, occurredAt: now.addingTimeInterval(4), sessionId: "s", turnId: "new", cwd: "/tmp/test", status: .attention, terminal: .init(kind: .unknown)))
+    #expect(store.sessions.first?.status == .ready)
+    #expect(alerts == 1)
+    #expect(completions == 1)
+}
+
+@MainActor
+@Test func attentionSortsFirstAndDeadWaitingAgentsDisappear() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: root, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
+    store.apply(.init(eventType: .userPromptSubmit, sessionId: "running", cwd: "/tmp/test", status: .running, terminal: .init(kind: .unknown)))
+    store.apply(.init(eventType: .permissionRequested, sessionId: "waiting", cwd: "/tmp/test", status: .attention, terminal: .init(kind: .unknown, agentPid: .max)))
+    #expect(store.visibleSessions.first?.id == "codex:waiting")
+    store.reconcileProcesses()
+    #expect(store.visibleSessions.map(\.id) == ["codex:running"])
+}
+
+@MainActor
+@Test func lateClaudePermissionReminderDoesNotReactivateCompletedSession() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = SessionStore(completionAlertDelay: .zero, baseDirectory: root, speechOutput: { _, _ in })
+    store.setPermissionAlertsEnabled(true, for: .codex)
+    let now = Date()
+    store.apply(.init(provider: .claude, eventType: .userPromptSubmit, occurredAt: now, sessionId: "s", cwd: "/tmp/test", status: .running, terminal: .init(kind: .unknown)))
+    store.apply(.init(provider: .claude, eventType: .stop, occurredAt: now.addingTimeInterval(1), sessionId: "s", cwd: "/tmp/test", status: .ready, terminal: .init(kind: .unknown)))
+    store.apply(.init(provider: .claude, eventType: .permissionRequested, occurredAt: now.addingTimeInterval(2), sessionId: "s", cwd: "/tmp/test", status: .attention, terminal: .init(kind: .unknown), attentionReason: "Waiting for permission"))
+    #expect(store.sessions.first?.status == .ready)
+    #expect(store.sessions.first?.attentionReason == nil)
+}
+
+@MainActor
+@Test func questionAudioWinsOverFinishInEitherArrivalOrder() async throws {
+    for provider in AgentProvider.allCases {
+        for finishFirst in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let suite = "AgentMonitorTests.\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            defer {
+                try? FileManager.default.removeItem(at: root)
+                defaults.removePersistentDomain(forName: suite)
+            }
+            defaults.set(true, forKey: "speechEnabled")
+            defaults.set(true, forKey: "speakOnCompletion")
+            defaults.set("Test Voice", forKey: "speechVoice")
+            var spoken: [String] = []
+            var completions = 0
+            let store = SessionStore(completionAlertDelay: .milliseconds(40), baseDirectory: root,
+                                     defaults: defaults, diagnosticsEnabled: true,
+                                     speechOutput: { phrase, voice in
+                spoken.append(phrase)
+                #expect(voice == "Test Voice")
+            })
+            store.onCompletion = { completions += 1 }
+            func event(_ type: MonitorEventType, _ status: SessionStatus, tool: String? = nil) -> MonitorEvent {
+                .init(provider: provider, eventType: type, sessionId: "s", turnId: "t", cwd: "/tmp/test",
+                      status: status, terminal: .init(kind: .unknown), toolUseID: tool,
+                      attentionReason: status == .attention ? "Waiting for input" : nil)
+            }
+            let completion: MonitorEventType = provider == .codex ? .agentTurnComplete : .stop
+            store.apply(event(.userPromptSubmit, .running))
+            if finishFirst { store.apply(event(completion, .ready)) }
+            store.apply(event(.inputRequested, .attention, tool: "question"))
+            if !finishFirst { store.apply(event(completion, .ready)) }
+            store.apply(event(.inputRequested, .attention, tool: "question"))
+            if provider == .codex { store.apply(event(.stop, .stale)) }
+            store.apply(event(.postToolUse, .running, tool: "unrelated-tool"))
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(store.sessions.first?.status == .attention)
+            #expect(store.sessions.first?.completedAt == nil)
+            #expect(completions == 0)
+            #expect(spoken == ["\(provider.displayName) needs your input"])
+            #expect(store.diagnosticEvents.filter(\.speechTriggered).count == 1)
+            // Answering does not replay the premature finish. A new finish is required.
+            store.apply(event(.postToolUse, .running, tool: "question"))
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(store.sessions.first?.status == .running)
+            #expect(completions == 0)
+            let finished = event(completion, .ready)
+            store.apply(finished)
+            store.apply(finished)
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(store.sessions.first?.status == .ready)
+            #expect(completions == 1)
+            #expect(spoken == ["\(provider.displayName) needs your input", "\(provider.displayName) finished"])
+            #expect(store.diagnosticEvents.filter(\.speechTriggered).count == 2)
+        }
+    }
+}
+
+@MainActor
+@Test func attentionSpeechRespectsMasterAndSeparatePreference() {
+    for provider in AgentProvider.allCases {
+        for enabled in [false, true] {
+            for attentionEnabled in [false, true] {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                let suite = "AgentMonitorTests.\(UUID().uuidString)"
+                let defaults = UserDefaults(suiteName: suite)!
+                defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+                defaults.set(enabled, forKey: "speechEnabled")
+                defaults.set(attentionEnabled, forKey: "speakOnAttention")
+                defaults.set(false, forKey: "speakOnCompletion")
+                var spoken: [String] = []
+                let store = SessionStore(baseDirectory: root, defaults: defaults, diagnosticsEnabled: true,
+                                         speechOutput: { phrase, _ in spoken.append(phrase) })
+                store.setPermissionAlertsEnabled(true, for: .codex)
+                store.apply(.init(provider: provider, eventType: .permissionRequested, sessionId: "s",
+                                  cwd: "/tmp/test", status: .attention, terminal: .init(kind: .unknown),
+                                  attentionReason: "Waiting for permission"))
+                #expect(store.sessions.first?.status == .attention)
+                #expect(spoken == (enabled && attentionEnabled ? ["\(provider.displayName) needs your permission"] : []))
+                #expect(store.diagnosticEvents.last?.speechTriggered == (enabled && attentionEnabled))
+            }
+        }
+    }
+}
+
+@MainActor
+@Test func interruptedQuestionAndCancelledCompletionRemainSilent() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let suite = "AgentMonitorTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+    defaults.set(true, forKey: "speechEnabled")
+    defaults.set(true, forKey: "speakOnCompletion")
+    var spoken: [String] = []
+    let store = SessionStore(completionAlertDelay: .milliseconds(40), baseDirectory: root, defaults: defaults,
+                             speechOutput: { phrase, _ in spoken.append(phrase) })
+    func event(_ type: MonitorEventType, _ status: SessionStatus) -> MonitorEvent {
+        .init(eventType: type, sessionId: "s", cwd: "/tmp/test", status: status,
+              terminal: .init(kind: .unknown), attentionReason: status == .attention ? "Waiting for input" : nil)
+    }
+    store.apply(event(.inputRequested, .attention))
+    store.apply(event(.interrupt, .stale))
+    #expect(store.visibleSessions.isEmpty)
+    store.apply(event(.userPromptSubmit, .running))
+    store.apply(event(.agentTurnComplete, .ready))
+    store.apply(event(.userPromptSubmit, .running))
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(store.sessions.first?.status == .running)
+    #expect(spoken == ["Codex needs your input"])
+    store.apply(event(.agentTurnComplete, .ready))
+    store.dismiss("codex:s")
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(spoken.count == 1)
+}
+
+@MainActor
+@Test func providerPermissionToggleMutesWithoutMutingQuestions() {
+    for provider in AgentProvider.allCases {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "AgentMonitorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "speechEnabled")
+        defaults.set(true, forKey: "speakOnAttention")
+        defaults.set(true, forKey: "speakOnCompletion")
+        defaults.set(true, forKey: "attentionNotificationsEnabled")
+        var spoken: [String] = []
+        var attentionSignals = 0
+        let store = SessionStore(completionAlertDelay: .zero, baseDirectory: root, defaults: defaults,
+                                 diagnosticsEnabled: true, speechOutput: { phrase, _ in spoken.append(phrase) })
+        store.onAttention = { attentionSignals += 1 }
+        func event(_ type: MonitorEventType, _ status: SessionStatus) -> MonitorEvent {
+            .init(provider: provider, eventType: type, sessionId: "s", cwd: "/tmp/test", status: status,
+                  terminal: .init(kind: .unknown), toolUseID: "tool",
+                  attentionReason: type == .inputRequested ? "Waiting for input" : "Waiting for permission")
+        }
+        store.setPermissionAlertsEnabled(false, for: provider)
+        store.apply(event(.userPromptSubmit, .running))
+        for _ in 0..<3 { store.apply(event(.permissionRequested, .attention)) }
+        #expect(store.visibleSessions.first?.status == .running)
+        #expect(attentionSignals == 0)
+        #expect(spoken.isEmpty)
+        #expect(store.diagnosticEvents.last?.outcome == .ignoredPermissionAlertsDisabled)
+        #expect(store.diagnosticEvents.last?.notificationTriggered == false)
+        #expect(store.diagnosticEvents.last?.speechTriggered == false)
+
+        defaults.set(false, forKey: "inputNotificationsEnabled")
+        defaults.set(false, forKey: "permissionNotificationsEnabled")
+        store.apply(event(.inputRequested, .attention))
+        store.apply(event(.permissionRequested, .attention))
+        #expect(store.visibleSessions.first?.attentionReason == "Waiting for input")
+        #expect(attentionSignals == 1)
+        #expect(spoken == ["\(provider.displayName) needs your input"])
+        store.apply(event(.postToolUse, .running))
+        store.apply(event(provider == .codex ? .agentTurnComplete : .stop, .ready))
+        #expect(spoken.last == "\(provider.displayName) finished")
+
+        store.setPermissionAlertsEnabled(true, for: provider)
+        store.apply(event(.userPromptSubmit, .running))
+        store.apply(event(.permissionRequested, .attention))
+        #expect(store.visibleSessions.first?.status == .attention)
+        #expect(attentionSignals == 2)
+        #expect(spoken.last == "\(provider.displayName) needs your permission")
+    }
+}
+
+@MainActor
+@Test func disablingPermissionAlertsClearsExistingIndicatorsAndSurvivesRelaunch() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let suite = "AgentMonitorTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+    let store = SessionStore(baseDirectory: root, defaults: defaults)
+    store.setPermissionAlertsEnabled(true, for: .codex)
+    for provider in AgentProvider.allCases {
+        store.apply(.init(provider: provider, eventType: .permissionRequested, sessionId: "permission", cwd: "/tmp/test",
+                          status: .attention, terminal: .init(kind: .unknown), toolUseID: "approval", attentionReason: "Waiting for permission"))
+        store.apply(.init(provider: provider, eventType: .inputRequested, sessionId: "input", cwd: "/tmp/test",
+                          status: .attention, terminal: .init(kind: .unknown), toolUseID: "question", attentionReason: "Waiting for input"))
+    }
+    for provider in AgentProvider.allCases { store.setPermissionAlertsEnabled(false, for: provider) }
+    for session in store.sessions {
+        if session.id.hasSuffix(":permission") {
+            #expect(session.status == .running)
+            #expect(session.attentionReason == nil)
+            #expect(session.attentionToolUseID == nil)
+        } else {
+            #expect(session.status == .attention)
+            #expect(session.attentionToolUseID == "question")
+        }
+    }
+    #expect(store.visibleSessions.filter { $0.status == .attention }.count == 2)
+    let restored = SessionStore(baseDirectory: root, defaults: defaults)
+    #expect(restored.sessions.map(\.id) == store.sessions.map(\.id))
+    #expect(restored.sessions.map(\.status) == store.sessions.map(\.status))
+    #expect(restored.sessions.map(\.attentionReason) == store.sessions.map(\.attentionReason))
+    #expect(restored.sessions.map(\.attentionToolUseID) == store.sessions.map(\.attentionToolUseID))
+    #expect(defaults.bool(forKey: "codexPermissionAlertsEnabled") == false)
+
+    // Also clear permission state saved before the preference changed, such as
+    // a launch after changing the setting while the monitor was not running.
+    store.setPermissionAlertsEnabled(true, for: .codex)
+    store.apply(.init(eventType: .permissionRequested, sessionId: "permission", cwd: "/tmp/test", status: .attention,
+                      terminal: .init(kind: .unknown), attentionReason: "Waiting for permission"))
+    defaults.set(false, forKey: "codexPermissionAlertsEnabled")
+    let restarted = SessionStore(baseDirectory: root, defaults: defaults)
+    #expect(restarted.sessions.first { $0.id == "codex:permission" }?.status == .running)
+}
+
+@MainActor
+@Test func permissionDefaultsAndSwitchesAreIndependentForEachAgent() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let suite = "AgentMonitorTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+    let store = SessionStore(baseDirectory: root, defaults: defaults)
+    #expect(!AlertPreferences.permissionEnabled(for: .codex, defaults: defaults))
+    #expect(AlertPreferences.permissionEnabled(for: .claude, defaults: defaults))
+    func request(_ provider: AgentProvider) -> MonitorEvent {
+        .init(provider: provider, eventType: .permissionRequested, sessionId: "s", cwd: "/tmp/test", status: .attention,
+              terminal: .init(kind: .unknown), attentionReason: "Waiting for permission")
+    }
+    for provider in AgentProvider.allCases {
+        store.apply(.init(provider: provider, eventType: .userPromptSubmit, sessionId: "s", cwd: "/tmp/test", status: .running, terminal: .init(kind: .unknown)))
+        store.apply(request(provider))
+    }
+    #expect(store.sessions.first { $0.provider == .codex }?.status == .running)
+    #expect(store.sessions.first { $0.provider == .claude }?.status == .attention)
+    store.setPermissionAlertsEnabled(true, for: .codex)
+    store.apply(request(.codex))
+    store.setPermissionAlertsEnabled(false, for: .claude)
+    #expect(store.sessions.first { $0.provider == .codex }?.status == .attention)
+    #expect(store.sessions.first { $0.provider == .claude }?.status == .running)
+    let restored = SessionStore(baseDirectory: root, defaults: defaults)
+    #expect(restored.sessions.first { $0.provider == .codex }?.status == .attention)
+    #expect(restored.sessions.first { $0.provider == .claude }?.status == .running)
+}
+
+@Test func alertSettingsMigrationPreservesCustomizationsAndAppliesProviderDefaults() {
+    let suite = "AgentMonitorTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(false, forKey: "permissionAlertsEnabled")
+    defaults.set(false, forKey: "speakOnAttention")
+    defaults.set(true, forKey: "attentionNotificationsEnabled")
+    defaults.set("Grandpa", forKey: "speechVoice")
+    defaults.set("{project} is ready", forKey: "speechCompletionTemplate")
+    AlertPreferences.migrate(defaults)
+    #expect(!AlertPreferences.permissionEnabled(for: .codex, defaults: defaults))
+    #expect(AlertPreferences.permissionEnabled(for: .claude, defaults: defaults))
+    for trigger in [AlertTrigger.input, .permission] {
+        #expect(!defaults.bool(forKey: trigger.speechKey))
+        #expect(defaults.bool(forKey: trigger.notificationKey))
+    }
+    #expect(defaults.string(forKey: "speechVoice") == "Grandpa")
+    #expect(defaults.string(forKey: "speechCompletionTemplate") == "{project} is ready")
+    defaults.set(true, forKey: "codexPermissionAlertsEnabled")
+    defaults.set(false, forKey: "claudePermissionAlertsEnabled")
+    defaults.set(true, forKey: "speakOnInput")
+    defaults.set(false, forKey: "inputNotificationsEnabled")
+    AlertPreferences.migrate(defaults)
+    #expect(AlertPreferences.permissionEnabled(for: .codex, defaults: defaults))
+    #expect(!AlertPreferences.permissionEnabled(for: .claude, defaults: defaults))
+    #expect(defaults.bool(forKey: "speakOnInput"))
+    #expect(!defaults.bool(forKey: "inputNotificationsEnabled"))
+}
+
+@MainActor
+@Test func everyTriggerUsesItsOwnSpeechToggleTemplateAndBlankFallback() {
+    for provider in AgentProvider.allCases {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "AgentMonitorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "speechEnabled")
+        defaults.set(true, forKey: "speakOnCompletion")
+        var spoken: [String] = []
+        let store = SessionStore(completionAlertDelay: .zero, baseDirectory: root, defaults: defaults,
+                                 speechOutput: { phrase, _ in spoken.append(phrase) })
+        store.setPermissionAlertsEnabled(true, for: provider)
+        func emit(_ trigger: AlertTrigger) {
+            store.apply(.init(provider: provider, eventType: .userPromptSubmit, sessionId: "s", cwd: "/tmp/project",
+                              status: .running, terminal: .init(kind: .unknown)))
+            let type: MonitorEventType = trigger == .finished ? (provider == .codex ? .agentTurnComplete : .stop)
+                : trigger == .input ? .inputRequested : .permissionRequested
+            store.apply(.init(provider: provider, eventType: type, sessionId: "s", cwd: "/tmp/project",
+                              status: trigger == .finished ? .ready : .attention, terminal: .init(kind: .unknown),
+                              attentionReason: trigger == .input ? "Waiting for input" : "Waiting for permission"))
+        }
+        for trigger in AlertTrigger.allCases {
+            defaults.set("\(trigger.rawValue): {agent} / {project} / {directory}", forKey: trigger.templateKey)
+            let before = spoken.count
+            defaults.set(false, forKey: trigger.speechKey)
+            emit(trigger)
+            #expect(spoken.count == before)
+            defaults.set(true, forKey: trigger.speechKey)
+            emit(trigger)
+            #expect(spoken.last == "\(trigger.rawValue): \(provider.displayName) / project / /tmp/project")
+            defaults.set("  \n  ", forKey: trigger.templateKey)
+            emit(trigger)
+            #expect(spoken.last == trigger.defaultMessage.replacingOccurrences(of: "{agent}", with: provider.displayName))
+        }
+    }
 }

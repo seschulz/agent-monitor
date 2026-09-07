@@ -5,11 +5,13 @@ import AgentMonitorShared
 @testable import AgentMonitorHelper
 #endif
 
-@Test func ignoresCodexPermissionRequests() throws {
-    let json = #"{"session_id":"session-1","turn_id":"turn-1","cwd":"/tmp/repo","hook_event_name":"PermissionRequest","reason":"Run tests","prompt":"private"}"#
-    #expect(throws: HookInputDecoder.DecodeError.self) {
-        try HookInputDecoder.decodeCodexHook(Data(json.utf8), terminal: .init(kind: .terminalApp, tty: "/dev/ttys001"))
-    }
+@Test func decodesCodexPermissionRequestsWithoutPrivateInput() throws {
+    let json = #"{"session_id":"session-1","turn_id":"turn-1","cwd":"/tmp/repo","hook_event_name":"PermissionRequest","tool_use_id":"call-1","reason":"private reason","tool_input":{"command":"private command"}}"#
+    let event = try HookInputDecoder.decodeCodexHook(Data(json.utf8), terminal: .init(kind: .terminalApp))
+    #expect(event.status == .attention)
+    #expect(event.attentionReason == "Waiting for permission")
+    #expect(event.toolUseID == "call-1")
+    #expect(!String(data: try JSONEncoder.monitorEncoder.encode(event), encoding: .utf8)!.contains("private"))
 }
 
 @Test func decodesCompletionNotification() throws {
@@ -67,10 +69,35 @@ import AgentMonitorShared
     ))
 }
 
-@Test func ignoresClaudeNotifications() throws {
+@Test func decodesClaudePermissionNotificationsButIgnoresIdleAndUnrelatedNotifications() throws {
     let json = #"{"session_id":"claude-session","cwd":"/tmp/repo","hook_event_name":"Notification","notification_type":"permission_prompt","message":"private question"}"#
-    #expect(throws: HookInputDecoder.DecodeError.self) {
-        try HookInputDecoder.decodeClaudeHook(Data(json.utf8), terminal: .init(kind: .intellij))
+    let event = try HookInputDecoder.decodeClaudeHook(Data(json.utf8), terminal: .init(kind: .intellij))
+    #expect(event.status == .attention)
+    #expect(event.attentionReason == "Waiting for permission")
+    #expect(!String(data: try JSONEncoder.monitorEncoder.encode(event), encoding: .utf8)!.contains("private"))
+    for type in ["idle_prompt", "auth_success", "agent_completed"] {
+        #expect(throws: HookInputDecoder.DecodeError.self) {
+            try HookInputDecoder.decodeClaudeHook(Data(json.replacingOccurrences(of: "permission_prompt", with: type).utf8), terminal: .init(kind: .unknown))
+        }
+    }
+}
+
+@Test func inputPromptsUseOnlyExplicitQuestionTools() throws {
+    for (provider, tool) in [(AgentProvider.codex, "request_user_input"), (.claude, "AskUserQuestion")] {
+        let json = #"{"session_id":"s","cwd":"/tmp/repo","hook_event_name":"PreToolUse","tool_name":"TOOL","tool_use_id":"question-1","tool_input":{"questions":["private question"]}}"#.replacingOccurrences(of: "TOOL", with: tool)
+        let decode = provider == .codex ? HookInputDecoder.decodeCodexHook : HookInputDecoder.decodeClaudeHook
+        let event = try decode(Data(json.utf8), .init(kind: .unknown))
+        #expect(event.eventType == .inputRequested)
+        #expect(event.attentionReason == "Waiting for input")
+        #expect(event.toolUseID == "question-1")
+        if provider == .claude {
+            let permission = try decode(Data(json.replacingOccurrences(of: "PreToolUse", with: "PermissionRequest").utf8), .init(kind: .unknown))
+            #expect(permission.attentionReason == "Waiting for input")
+        }
+        #expect(!String(data: try JSONEncoder.monitorEncoder.encode(event), encoding: .utf8)!.contains("private"))
+        #expect(throws: HookInputDecoder.DecodeError.self) {
+            try decode(Data(json.replacingOccurrences(of: tool, with: "Bash").utf8), .init(kind: .unknown))
+        }
     }
 }
 
@@ -170,3 +197,10 @@ import AgentMonitorShared
     #expect(!HostDetector.isClaudeCommand("/bin/zsh -c agent-monitor-helper claude-hook"))
 }
 #endif
+
+@Test func codexInterruptIsDistinctFromStopWhileWaitingForInput() throws {
+    let json = #"{"session_id":"s","cwd":"/tmp/repo","hook_event_name":"Interrupt"}"#
+    let event = try HookInputDecoder.decodeCodexHook(Data(json.utf8), terminal: .init(kind: .unknown))
+    #expect(event.eventType == .interrupt)
+    #expect(event.status == .stale)
+}

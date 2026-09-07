@@ -734,7 +734,7 @@ struct SessionRow: View {
             .padding(compact ? overlayDensity.rowPadding : menuBarDensity.rowPadding)
         }
         .buttonStyle(.plain)
-        .help("\(session.displayName)\n\(session.status.label) · \(session.provider.displayName) · \(session.terminal.displayName)\n\(session.cwd)")
+        .help("\(session.displayName)\n\(session.attentionReason ?? session.status.label) · \(session.provider.displayName) · \(session.terminal.displayName)\n\(session.cwd)")
         .frame(height: compact ? nil : menuBarDensity.rowHeight)
     }
 
@@ -807,7 +807,8 @@ struct SessionRow: View {
     @ViewBuilder
     private func sessionDetails(includeTerminal: Bool) -> some View {
         HStack(spacing: 4) {
-            Text(session.status.label)
+            Text(session.attentionReason ?? session.status.label)
+                .foregroundStyle(session.status == .attention ? Color.orange : Color.secondary)
             if includeTerminal {
                 Text("·")
                 Text(session.provider.displayName)
@@ -850,19 +851,30 @@ struct SessionRow: View {
 }
 
 private enum SettingsPane: String, CaseIterable, Identifiable {
-    case general
-    case interface
-    case notifications
-    case advanced
-
+    case general, integrations, alerts, appearance
     var id: String { rawValue }
-
     var label: String {
         switch self {
         case .general: "General"
-        case .interface: "Interface"
-        case .notifications: "Notifications"
-        case .advanced: "Advanced"
+        case .integrations: "Integrations"
+        case .alerts: "Alerts & Voice"
+        case .appearance: "Appearance"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .general: "gearshape"
+        case .integrations: "terminal"
+        case .alerts: "bell.badge"
+        case .appearance: "rectangle.on.rectangle"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .general: "Startup, updates, and local session history."
+        case .integrations: "Connect your agents and choose how sessions open."
+        case .alerts: "Decide what deserves your attention—and how you hear it."
+        case .appearance: "Make the menu bar and floating widget feel right for you."
         }
     }
 }
@@ -875,13 +887,23 @@ struct SettingsView: View {
     @AppStorage("intellijTabSwitchingEnabled") private var intellijTabSwitchingEnabled = true
     @AppStorage("overlayEnabled") private var overlayEnabled = true
     @AppStorage("notificationsEnabled") private var notificationsEnabled = false
+    @AppStorage("inputNotificationsEnabled") private var inputNotificationsEnabled = false
+    @AppStorage("permissionNotificationsEnabled") private var permissionNotificationsEnabled = false
+    @AppStorage("codexPermissionAlertsEnabled") private var codexPermissionAlertsEnabled = false
+    @AppStorage("claudePermissionAlertsEnabled") private var claudePermissionAlertsEnabled = true
+    @State private var selectedAlert = AlertTrigger.finished
+    @State private var previewAgent = AgentProvider.codex
     @AppStorage("readyRetentionMinutes") private var readyRetentionMinutes = 15
     @AppStorage("showReadyInOverlay") private var showReadyInOverlay = true
     @AppStorage("overlayRetentionMinutes") private var overlayRetentionMinutes = 5
     @AppStorage("speechEnabled") private var speechEnabled = false
+    @AppStorage("speakOnInput") private var speakOnInput = true
+    @AppStorage("speakOnPermission") private var speakOnPermission = true
     @AppStorage("speakOnCompletion") private var speakOnCompletion = true
     @AppStorage("speechVoice") private var speechVoice = SpeechService.systemDefaultVoice
-    @AppStorage("speechCompletionTemplate") private var speechCompletionTemplate = CompletionSpeechTemplate.defaultValue
+    @AppStorage("speechCompletionTemplate") private var speechCompletionTemplate = AlertTrigger.finished.defaultMessage
+    @AppStorage("speechInputTemplate") private var speechInputTemplate = AlertTrigger.input.defaultMessage
+    @AppStorage("speechPermissionTemplate") private var speechPermissionTemplate = AlertTrigger.permission.defaultMessage
     @AppStorage("overlayDensity") private var overlayDensity = OverlayDensity.standard.rawValue
     @AppStorage("overlayAppearanceStyle") private var overlayAppearanceStyle = OverlayAppearanceStyle.automatic.rawValue
     @AppStorage("overlayBackgroundOpacity") private var overlayBackgroundOpacity = 0.8
@@ -911,42 +933,70 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Settings category", selection: $selectedPane) {
-                ForEach(SettingsPane.allCases) { pane in
-                    Text(pane.label).tag(pane)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Agent Monitor").font(.headline)
+                    Text("Settings").font(.caption).foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 18)
+                .padding(.top, 24)
+
+                VStack(spacing: 5) {
+                    ForEach(SettingsPane.allCases) { pane in
+                        Button {
+                            selectedPane = pane
+                        } label: {
+                            Label(pane.label, systemImage: pane.symbol)
+                                .font(.system(size: 13, weight: selectedPane == pane ? .semibold : .regular))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 11)
+                                .background(selectedPane == pane ? Color.accentColor.opacity(0.14) : Color.clear,
+                                            in: RoundedRectangle(cornerRadius: 8))
+                                .foregroundStyle(selectedPane == pane ? Color.accentColor : Color.primary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selectedPane == pane ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 10)
+                Spacer()
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .frame(width: 178)
+            .background(Color(nsColor: .windowBackgroundColor))
 
             Divider()
-
-            Form {
-                selectedSettings
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(selectedPane.label).font(.system(size: 25, weight: .bold))
+                    Text(selectedPane.detail).font(.callout).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .padding(.bottom, 12)
+                Form {
+                    switch selectedPane {
+                    case .general:
+                        generalSettings
+                        advancedSettings
+                    case .integrations:
+                        integrationSettings
+                    case .appearance:
+                        interfaceSettings
+                    case .alerts:
+                        alertSettings
+                    }
+                }
+                .formStyle(.grouped)
+                .id(selectedPane)
             }
-            .formStyle(.grouped)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 560, idealWidth: 620, minHeight: 520, idealHeight: 640)
+        .frame(minWidth: 780, idealWidth: 840, minHeight: 650, idealHeight: 780)
         .onAppear { accessibilityGranted = AXIsProcessTrusted() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             accessibilityGranted = AXIsProcessTrusted()
-        }
-    }
-
-    @ViewBuilder
-    private var selectedSettings: some View {
-        switch selectedPane {
-        case .general:
-            generalSettings
-        case .interface:
-            interfaceSettings
-        case .notifications:
-            notificationSettings
-        case .advanced:
-            advancedSettings
         }
     }
 
@@ -968,6 +1018,25 @@ struct SettingsView: View {
             }
         }
 
+        Section("Software Updates") {
+            Toggle("Check for updates automatically", isOn: Binding(
+                get: { updateService.automaticallyChecksForUpdates },
+                set: { updateService.setAutomaticallyChecksForUpdates($0) }
+            ))
+            HStack {
+                LabeledContent("Installed version", value: updateService.currentVersion)
+                Spacer()
+                Button("Check for Updates…") { updateService.checkNow() }
+                    .disabled(!updateService.canCheckForUpdates)
+            }
+            Text("Updates come from GitHub Releases and are verified by Sparkle before installation.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var integrationSettings: some View {
         Section("Agent Integrations") {
             Text("Hooks let Codex and Claude Code report session activity to Agent Monitor.")
                 .font(.caption)
@@ -1018,21 +1087,6 @@ struct SettingsView: View {
             }
         }
 
-        Section("Software Updates") {
-            Toggle("Check for updates automatically", isOn: Binding(
-                get: { updateService.automaticallyChecksForUpdates },
-                set: { updateService.setAutomaticallyChecksForUpdates($0) }
-            ))
-            HStack {
-                LabeledContent("Installed version", value: updateService.currentVersion)
-                Spacer()
-                Button("Check for Updates…") { updateService.checkNow() }
-                    .disabled(!updateService.canCheckForUpdates)
-            }
-            Text("Updates come from GitHub Releases and are verified by Sparkle before installation.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
     }
 
     @ViewBuilder
@@ -1120,59 +1174,145 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var notificationSettings: some View {
-        Section("macOS Notifications") {
-            Text("Show a standard notification when an agent finishes.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Toggle("Notify when an agent finishes", isOn: $notificationsEnabled)
-                .onChange(of: notificationsEnabled) { _, value in runtime.requestNotifications(value) }
-        }
-
-        Section("Spoken Notifications") {
-            Text("Announce finished agent turns. Ongoing activity and tool calls remain silent.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Toggle("Announce finished agent turns", isOn: completionSpeechEnabled)
+    private var alertSettings: some View {
+        Section("Voice") {
+            Toggle("Enable spoken alerts", isOn: $speechEnabled)
             Picker("Voice", selection: $speechVoice) {
                 ForEach(SpeechService.availableVoices, id: \.self) { voice in
                     Text(voice).tag(voice)
                 }
             }
-            .disabled(!completionSpeechEnabled.wrappedValue)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Message template")
-                    .font(.subheadline)
-                TextField(
-                    "Message template",
-                    text: $speechCompletionTemplate,
-                    prompt: Text(CompletionSpeechTemplate.defaultValue)
-                )
-                .labelsHidden()
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Spoken message template")
-                Text("Leave blank to use “\(CompletionSpeechTemplate.defaultValue)”.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Available placeholders: {agent}, {project}, {terminal}, {directory}")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Divider()
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Preview")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text(completionSpeechPreview)
-                        .textSelection(.enabled)
+            .disabled(!speechEnabled)
+        }
+
+        Section("Choose a trigger") {
+            Picker("Alert trigger", selection: $selectedAlert) {
+                ForEach(AlertTrigger.allCases) { trigger in
+                    Label(trigger.label, systemImage: trigger.symbol).tag(trigger)
                 }
             }
-            .disabled(!completionSpeechEnabled.wrappedValue)
-            Button("Play Preview") {
-                SpeechService.speak(completionSpeechPreview, voice: speechVoice)
-            }
-            .disabled(!completionSpeechEnabled.wrappedValue)
+            .pickerStyle(.segmented)
+            .labelsHidden()
         }
+
+        Section {
+            if selectedAlert == .permission {
+                Toggle("Codex permission alerts", isOn: $codexPermissionAlertsEnabled)
+                    .onChange(of: codexPermissionAlertsEnabled) { _, value in
+                        runtime.store.setPermissionAlertsEnabled(value, for: .codex)
+                    }
+                Toggle("Claude Code permission alerts", isOn: $claudePermissionAlertsEnabled)
+                    .onChange(of: claudePermissionAlertsEnabled) { _, value in
+                        runtime.store.setPermissionAlertsEnabled(value, for: .claude)
+                    }
+                Text("Defaults: Codex off, Claude Code on. Turning an agent off silences permission alerts and clears its permission indicators. Input questions still alert normally.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Toggle("Show a macOS notification", isOn: notificationBinding)
+                .disabled(permissionDeliveryDisabled)
+            Toggle("Speak this alert", isOn: triggerSpeechBinding)
+                .disabled(!speechEnabled || permissionDeliveryDisabled)
+            if permissionDeliveryDisabled {
+                Text("Enable permission alerts for an agent above to use these delivery options.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !speechEnabled {
+                Text("Enable spoken alerts above to hear this message.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text(selectedAlert.title)
+        } footer: {
+            Text(selectedAlert.detail)
+        }
+
+        Section("Spoken message") {
+            TextField("Message for \(selectedAlert.label.lowercased())", text: templateBinding, axis: .vertical)
+                .labelsHidden()
+                .lineLimit(2...4)
+                .textFieldStyle(.plain)
+                .font(.body.monospaced())
+                .accessibilityLabel("\(selectedAlert.label) spoken message")
+            Text("Use {agent}, {project}, {terminal}, or {directory}. Leave blank for the default message.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Picker("Preview as", selection: $previewAgent) {
+                    Text("Codex").tag(AgentProvider.codex)
+                    Text("Claude Code").tag(AgentProvider.claude)
+                }
+                .frame(maxWidth: 230)
+                Spacer()
+                Button {
+                    SpeechService.speak(speechPreview, voice: speechVoice)
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                }
+                .disabled(!speechEnabled)
+                .help("Play a preview using the selected voice")
+            }
+            Text(speechPreview)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .accessibilityLabel("Message preview: \(speechPreview)")
+            HStack {
+                Spacer()
+                Button("Reset message") { templateBinding.wrappedValue = selectedAlert.defaultMessage }
+                    .disabled(templateBinding.wrappedValue == selectedAlert.defaultMessage)
+            }
+        }
+    }
+
+    private var permissionDeliveryDisabled: Bool {
+        selectedAlert == .permission && !codexPermissionAlertsEnabled && !claudePermissionAlertsEnabled
+    }
+
+    private var notificationBinding: Binding<Bool> {
+        Binding(get: {
+            switch selectedAlert {
+            case .finished: notificationsEnabled
+            case .input: inputNotificationsEnabled
+            case .permission: permissionNotificationsEnabled
+            }
+        }, set: { value in
+            switch selectedAlert {
+            case .finished: notificationsEnabled = value
+            case .input: inputNotificationsEnabled = value
+            case .permission: permissionNotificationsEnabled = value
+            }
+            runtime.requestNotifications(value, preference: selectedAlert.notificationKey)
+        })
+    }
+
+    private var triggerSpeechBinding: Binding<Bool> {
+        Binding(get: {
+            switch selectedAlert {
+            case .finished: speakOnCompletion
+            case .input: speakOnInput
+            case .permission: speakOnPermission
+            }
+        }, set: { value in
+            switch selectedAlert {
+            case .finished: speakOnCompletion = value
+            case .input: speakOnInput = value
+            case .permission: speakOnPermission = value
+            }
+        })
+    }
+
+    private var templateBinding: Binding<String> {
+        Binding(get: {
+            switch selectedAlert {
+            case .finished: speechCompletionTemplate
+            case .input: speechInputTemplate
+            case .permission: speechPermissionTemplate
+            }
+        }, set: { value in
+            switch selectedAlert {
+            case .finished: speechCompletionTemplate = value
+            case .input: speechInputTemplate = value
+            case .permission: speechPermissionTemplate = value
+            }
+        })
     }
 
     @ViewBuilder
@@ -1197,23 +1337,14 @@ struct SettingsView: View {
         }
     }
 
-    private var completionSpeechEnabled: Binding<Bool> {
-        Binding(
-            get: { speechEnabled && speakOnCompletion },
-            set: {
-                speechEnabled = $0
-                speakOnCompletion = $0
-            }
-        )
-    }
-
-    private var completionSpeechPreview: String {
-        CompletionSpeechTemplate.render(
-            speechCompletionTemplate,
-            agent: "Codex",
+    private var speechPreview: String {
+        SpeechMessageTemplate.render(
+            templateBinding.wrappedValue,
+            agent: previewAgent.displayName,
             project: "agent-monitor",
             terminal: "Terminal",
-            directory: "/Users/example/agent-monitor"
+            directory: "/Users/example/agent-monitor",
+            fallback: selectedAlert.defaultMessage
         )
     }
 }

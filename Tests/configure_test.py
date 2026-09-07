@@ -48,11 +48,12 @@ class ConfigureTests(unittest.TestCase):
             self.assertNotIn('"async"', json.dumps(installed_hooks))
             self.assertIn("codex-hook", json.dumps(installed_hooks))
             self.assertNotIn("/old/agent-monitor-helper", json.dumps(installed_hooks))
-            self.assertNotIn("PermissionRequest", installed_hooks["hooks"])
+            self.assertIn("PermissionRequest", installed_hooks["hooks"])
+            self.assertEqual(installed_hooks["hooks"]["PreToolUse"][0]["matcher"], "request_user_input")
             installed_claude_hooks = json.loads(claude_path.read_text())["hooks"]
             self.assertIn("claude-hook", json.dumps(installed_claude_hooks["Stop"]))
             self.assertNotIn('"async"', json.dumps(installed_claude_hooks))
-            self.assertNotIn("Notification", installed_claude_hooks)
+            self.assertEqual(installed_claude_hooks["Notification"][0]["matcher"], "permission_prompt")
             self.assertIn("model = \"test\"", config_path.read_text())
 
             with redirect_stdout(io.StringIO()):

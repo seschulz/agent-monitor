@@ -9,6 +9,8 @@ enum HookInputDecoder {
         var hookEventName: String
         var turnId: String?
         var toolName: String?
+        var toolUseID: String?
+        var notificationType: String?
 
         enum CodingKeys: String, CodingKey {
             case sessionId = "session_id"
@@ -17,6 +19,8 @@ enum HookInputDecoder {
             case hookEventName = "hook_event_name"
             case turnId = "turn_id"
             case toolName = "tool_name"
+            case toolUseID = "tool_use_id"
+            case notificationType = "notification_type"
         }
     }
 
@@ -42,6 +46,9 @@ enum HookInputDecoder {
         case "userpromptsubmit": mapping = (.userPromptSubmit, .running)
         case "posttooluse": mapping = (.postToolUse, .running)
         case "stop": mapping = (.stop, .stale)
+        case "interrupt": mapping = (.interrupt, .stale)
+        case "permissionrequest": mapping = (.permissionRequested, .attention)
+        case "pretooluse" where payload.toolName == "request_user_input": mapping = (.inputRequested, .attention)
         case "sessionend": mapping = (.sessionEnd, .closed)
         default: throw DecodeError.unsupportedEvent(payload.hookEventName)
         }
@@ -55,7 +62,8 @@ enum HookInputDecoder {
             status: mapping.1,
             terminal: terminal,
             toolName: payload.toolName,
-            attentionReason: nil
+            toolUseID: payload.toolUseID,
+            attentionReason: mapping.0 == .permissionRequested ? "Waiting for permission" : mapping.0 == .inputRequested ? "Waiting for input" : nil
         )
     }
 
@@ -79,7 +87,11 @@ enum HookInputDecoder {
         switch payload.hookEventName.lowercased() {
         case "sessionstart": mapping = (.sessionStart, .ready, nil)
         case "userpromptsubmit": mapping = (.userPromptSubmit, .running, nil)
-        case "posttooluse": mapping = (.postToolUse, .running, nil)
+        case "posttooluse", "posttoolusefailure": mapping = (.postToolUse, .running, nil)
+        case "permissionrequest" where payload.toolName == "AskUserQuestion": mapping = (.inputRequested, .attention, "Waiting for input")
+        case "permissionrequest": mapping = (.permissionRequested, .attention, "Waiting for permission")
+        case "pretooluse" where payload.toolName == "AskUserQuestion": mapping = (.inputRequested, .attention, "Waiting for input")
+        case "notification" where payload.notificationType == "permission_prompt": mapping = (.permissionRequested, .attention, "Waiting for permission")
         case "stop": mapping = (.stop, .ready, nil)
         case "sessionend": mapping = (.sessionEnd, .closed, nil)
         default: throw DecodeError.unsupportedEvent(payload.hookEventName)
@@ -94,6 +106,7 @@ enum HookInputDecoder {
             status: mapping.1,
             terminal: terminal,
             toolName: payload.toolName,
+            toolUseID: payload.toolUseID,
             attentionReason: mapping.2
         )
     }
