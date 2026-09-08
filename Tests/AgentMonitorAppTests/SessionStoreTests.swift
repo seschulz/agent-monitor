@@ -186,6 +186,63 @@ import AgentMonitorShared
 }
 
 @MainActor
+@Test(.serialized, arguments: ["dismiss", "codexCompletion", "claudeCompletion"])
+func overlayHidesWhenItsLastSessionChangesWithoutARuntimeRefresh(_ removal: String) async throws {
+    _ = NSApplication.shared
+    let suite = "AgentMonitorTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.set(false, forKey: "showReadyInOverlay")
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let positionKeys = ["overlayTopLeft", "overlayPositionAnchor"]
+    let savedPosition = positionKeys.map { UserDefaults.standard.object(forKey: $0) }
+    defer {
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: directory)
+        for (key, value) in zip(positionKeys, savedPosition) {
+            UserDefaults.standard.set(value, forKey: key)
+        }
+    }
+    let store = SessionStore(completionAlertDelay: .milliseconds(30), baseDirectory: directory,
+                             defaults: defaults, speechOutput: { _, _ in })
+    let provider: AgentProvider = removal == "claudeCompletion" ? .claude : .codex
+    store.apply(.init(provider: provider, eventType: .userPromptSubmit, sessionId: "last",
+                      cwd: "/tmp/overlay-test", status: .running, terminal: .init(kind: .unknown)))
+    let overlay = OverlayController(store: store, sessionsDidChange: {})
+    defer { overlay.close() }
+    let panel = try #require(NSApplication.shared.windows.first { $0.delegate === overlay })
+    overlay.updateVisibility(hasSessions: true)
+    #expect(panel.isVisible)
+
+    if removal == "dismiss" {
+        // Menu-bar dismissal does not call MonitorRuntime.refreshOverlay().
+        store.dismiss("codex:last")
+    } else {
+        store.apply(.init(provider: provider, eventType: provider == .claude ? .stop : .agentTurnComplete,
+                          sessionId: "last", cwd: "/tmp/overlay-test", status: .ready,
+                          terminal: .init(kind: .unknown)))
+    }
+    let deadline = ContinuousClock.now + .seconds(1)
+    while (panel.isVisible || !store.overlaySessions.isEmpty), ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(store.overlaySessions.isEmpty)
+    #expect(!panel.isVisible, "An empty overlay must hide without waiting for the five-second runtime timer")
+
+    store.apply(.init(provider: provider, eventType: .userPromptSubmit, sessionId: "last",
+                      cwd: "/tmp/overlay-test", status: .running, terminal: .init(kind: .unknown)))
+    let reappearanceDeadline = ContinuousClock.now + .seconds(1)
+    while !panel.isVisible, ContinuousClock.now < reappearanceDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(panel.isVisible)
+    // A queued store update must not reopen a controller closed by Settings.
+    store.refreshDisplay()
+    overlay.close()
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(!panel.isVisible)
+}
+
+@MainActor
 @Test func overlayPositionMovesBackFromDisconnectedDisplay() {
     let corrected = OverlayController.reachableTopLeft(
         NSPoint(x: 2_264, y: 444),

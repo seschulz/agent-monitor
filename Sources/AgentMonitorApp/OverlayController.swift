@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -29,6 +30,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var savedPositionAnchor: PositionAnchor?
     private var userMoveInProgress = false
     private var savePositionWorkItem: DispatchWorkItem?
+    private var visibilitySubscription: AnyCancellable?
 
     init(store: SessionStore, sessionsDidChange: @escaping @MainActor () -> Void) {
         let density = OverlayDensity.current
@@ -72,6 +74,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        // Menu-bar dismissal and deferred completion can mutate the store
+        // without a runtime refresh. Read the committed state after @Published
+        // emits, keeping the panel in sync with the rows SwiftUI displays.
+        visibilitySubscription = store.$sessions.combineLatest(store.$displayDate)
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .map { [weak store] _ in !(store?.overlaySessions.isEmpty ?? true) }
+            .removeDuplicates()
+            .sink { [weak self] hasSessions in
+                self?.updateVisibility(hasSessions: hasSessions)
+            }
     }
 
     func updateVisibility(hasSessions: Bool) {
@@ -102,6 +115,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        visibilitySubscription?.cancel()
+        visibilitySubscription = nil
         savePositionWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
         panel.close()
@@ -317,6 +332,12 @@ private struct OverlayView: View {
     }
 
     var body: some View {
+        if !store.overlaySessions.isEmpty {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: density.rowSpacing) {
             ForEach(store.overlaySessions) { session in
                 HStack(spacing: 0) {
