@@ -62,6 +62,8 @@ Clicking a session brings its terminal host application forward. Some hosts can 
 
 ### IntelliJ IDEA and Rider
 
+Project-window selection is separate from terminal-tab selection. When the recorded terminal shell is still running and its working directory is inside a project with an `.idea` directory, clicking a session asks the IDE's launcher to bring that project forward. This works with terminal-tab switching disabled and does not require Accessibility access. If the project cannot be identified, the monitor activates the IDE instead.
+
 Exact tab selection works without an IDE plugin when:
 
 1. **Settings → Integrations → Terminal Navigation → Switch to the agent’s IDE terminal tab** is enabled.

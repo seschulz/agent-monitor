@@ -4,6 +4,48 @@ import Testing
 import AgentMonitorShared
 @testable import AgentMonitorApp
 
+@Test @MainActor func jetBrainsProjectLaunchUsesTheCommandLineFocusPath() {
+    let project = URL(fileURLWithPath: "/work/Project with spaces", isDirectory: true)
+    let configuration = TerminalFocusService.jetBrainsProjectConfiguration(for: project)
+    // Existing-instance opens ignore arguments. JetBrains' short-lived launcher
+    // forwards this path to the running IDE, whose command handler focuses it.
+    #expect(configuration.createsNewApplicationInstance)
+    #expect(configuration.arguments == ["/work/Project with spaces"])
+    #expect(configuration.activates)
+    #expect(!configuration.addsToRecentItems)
+}
+
+@Test func jetBrainsProjectURLFindsTheOwningProjectRatherThanOpeningASubfolder() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let project = root.appendingPathComponent("Project with spaces")
+    let source = project.appendingPathComponent("services/api/src")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: project.appendingPathComponent(".idea"), withIntermediateDirectories: true)
+
+    #expect(TerminalFocusService.jetBrainsProjectURL(cwd: source.path)?.path == project.path)
+    #expect(TerminalFocusService.jetBrainsProjectURL(cwd: project.path)?.path == project.path)
+
+    let nested = project.appendingPathComponent("services/api")
+    try FileManager.default.createDirectory(at: nested.appendingPathComponent(".idea"), withIntermediateDirectories: true)
+    #expect(TerminalFocusService.jetBrainsProjectURL(cwd: source.path)?.path == nested.path)
+}
+
+@Test func jetBrainsProjectURLDoesNotOpenUnknownOrMissingDirectories() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    #expect(TerminalFocusService.jetBrainsProjectURL(cwd: root.path) == nil)
+    #expect(TerminalFocusService.jetBrainsProjectURL(cwd: "relative/project") == nil)
+    #expect(TerminalFocusService.jetBrainsProjectURL(cwd: "") == nil)
+    // A file named .idea is not evidence that this directory is an IDE project.
+    try Data().write(to: root.appendingPathComponent(".idea"))
+    #expect(TerminalFocusService.jetBrainsProjectURL(cwd: root.path) == nil)
+    try FileManager.default.removeItem(at: root.appendingPathComponent(".idea"))
+    try FileManager.default.createDirectory(at: root.appendingPathComponent(".idea"), withIntermediateDirectories: true)
+    #expect(TerminalFocusService.jetBrainsProjectURL(cwd: root.appendingPathComponent("deleted").path) == nil)
+}
+
 @Test @MainActor func automaticTerminalMarkerFitsIntelliJTitleLimit() {
     let marker = JetBrainsTerminalFocus.makeTitleMarker()
     #expect(marker.count <= 30)

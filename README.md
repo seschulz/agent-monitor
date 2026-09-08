@@ -95,6 +95,8 @@ Click any session to bring its host application forward. Agent Monitor recognize
 
 **IntelliJ IDEA and Rider** can also select the connected terminal tab, without an IDE plugin. Enable **Settings → Integrations → Terminal Navigation** and grant Accessibility access if you want this feature. Otherwise, clicks simply open the IDE—no repeated permission or linking dialogs.
 
+With tab switching off, the monitor still brings the matching IDE project window forward when it can identify the project from the live terminal session. This does not require Accessibility access.
+
 **VS Code and its forks** open the editor; exact terminal-tab selection is not supported. See [terminal navigation details and limitations](docs/TROUBLESHOOTING.md#terminal-navigation).
 
 ## Find your settings

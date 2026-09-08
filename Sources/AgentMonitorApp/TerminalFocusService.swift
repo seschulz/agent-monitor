@@ -3,16 +3,71 @@ import AgentMonitorShared
 import Foundation
 
 enum TerminalFocusService {
+    static func jetBrainsProjectConfiguration(for projectURL: URL) -> NSWorkspace.OpenConfiguration {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.addsToRecentItems = false
+        // Equivalent to JetBrains' documented `open -na IDE --args <project>`:
+        // start its launcher so arguments reach the already-running IDE. The
+        // IDE's command handler focuses the project; a plain open-files event
+        // can import it without bringing the existing project window forward.
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = [projectURL.path]
+        return configuration
+    }
+
+    static func jetBrainsProjectURL(cwd: String) -> URL? {
+        guard cwd.hasPrefix("/") else { return nil }
+        var directory = URL(fileURLWithPath: cwd, isDirectory: true).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+
+        // A terminal may start below the project root. Opening that subfolder
+        // would create another project instead of raising the existing window.
+        while directory.path != "/" {
+            if FileManager.default.fileExists(atPath: directory.appendingPathComponent(".idea").path,
+                                              isDirectory: &isDirectory), isDirectory.boolValue {
+                return directory
+            }
+            directory.deleteLastPathComponent()
+        }
+        return nil
+    }
+
     @MainActor
     static func focus(_ session: SessionRecord) async throws {
         guard session.terminal.kind.isJetBrains else {
             try await focus(session.terminal)
             return
         }
-        try? await reopen(session.terminal)
-        try await activate(session.terminal)
+        // Multiple JetBrains project windows commonly share a single process.
+        // A normal application activation cannot distinguish them. The IDE's
+        // project launcher raises the window without selecting any terminal
+        // tab or using Accessibility.
+        if (try? await reopenProject(session)) != true {
+            try? await reopen(session.terminal)
+            try await activate(session.terminal)
+        }
         do { try await JetBrainsTerminalFocus.focus(session) }
         catch { JetBrainsTerminalFocus.showFailure(error) }
+    }
+
+    @MainActor
+    private static func reopenProject(_ session: SessionRecord) async throws -> Bool {
+        let host = session.terminal
+        guard let pid = host.hostPid,
+              let application = NSRunningApplication(processIdentifier: pid),
+              !application.isTerminated,
+              host.processStartedAt == nil || (application.launchDate ?? ProcessIdentity.startedAt(pid: pid))
+                .map({ abs($0.timeIntervalSince(host.processStartedAt!)) < 2 }) == true,
+              let shell = host.shell, shell.isLive(inHost: pid),
+              let applicationURL = application.bundleURL,
+              let projectURL = jetBrainsProjectURL(cwd: session.cwd) else { return false }
+
+        application.unhide()
+        try await openApplication(at: applicationURL, configuration: jetBrainsProjectConfiguration(for: projectURL))
+        return true
     }
 
     @MainActor
