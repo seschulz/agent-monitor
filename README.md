@@ -119,7 +119,7 @@ git clone https://github.com/seschulz/agent-monitor.git
 cd agent-monitor
 swift build
 swift test
-python3 -m unittest Tests/configure_test.py
+python3 -m unittest Tests/configure_test.py Tests/helper_process_test.py
 ```
 
 Want to run your changes in the menu bar? `./scripts/install-local.sh` builds and installs a local copy, configures the hooks, and launches the app. It replaces a running local installation; see the guide before using it for the first time.

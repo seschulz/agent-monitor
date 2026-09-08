@@ -18,7 +18,7 @@ git clone https://github.com/seschulz/agent-monitor.git
 cd agent-monitor
 swift build
 swift test
-python3 -m unittest Tests/configure_test.py
+python3 -m unittest Tests/configure_test.py Tests/helper_process_test.py
 ```
 
 These commands build the package and run its tests without installing hooks or replacing the installed app.
@@ -86,11 +86,11 @@ Codex desktop lifecycle events also enter through the app's desktop-session watc
 
 ## Test your change
 
-For Swift package tests and hook-configuration tests:
+For Swift package tests, hook-configuration tests, and the helper timeout regression:
 
 ```sh
 swift test
-python3 -m unittest Tests/configure_test.py
+python3 -m unittest Tests/configure_test.py Tests/helper_process_test.py
 ```
 
 For the Xcode test suite plus the Python tests:

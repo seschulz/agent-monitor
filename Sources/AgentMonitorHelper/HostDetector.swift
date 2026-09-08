@@ -87,8 +87,13 @@ enum HostDetector {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        do { try process.run(); process.waitUntilExit() } catch { return nil }
-        guard let line = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+        do { try process.run() } catch { return nil }
+        // A long ancestor command can fill the pipe. Drain it before waiting,
+        // otherwise ps blocks on write and the hook waits until Codex kills it.
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let line = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty else { return nil }
         let parts = line.split(whereSeparator: { $0.isWhitespace })
         guard parts.count >= 7, let parent = Int32(parts[0]) else { return nil }
