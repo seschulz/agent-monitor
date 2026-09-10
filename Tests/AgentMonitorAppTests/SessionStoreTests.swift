@@ -4,6 +4,40 @@ import Testing
 import AgentMonitorShared
 @testable import AgentMonitorApp
 
+@Test @MainActor func projectFocusActivatesWhenLauncherLeavesTheIDEInBackground() async throws {
+    var foregroundPID: Int32 = 100
+    try await TerminalFocusService.ensureProjectForeground(
+        isForeground: { foregroundPID == 200 },
+        activate: { foregroundPID = 200 }
+    )
+    #expect(foregroundPID == 200)
+}
+
+@Test @MainActor func projectFocusPreservesSuccessfulProjectActivation() async throws {
+    var activationCount = 0
+    try await TerminalFocusService.ensureProjectForeground(
+        isForeground: { true },
+        activate: { activationCount += 1 }
+    )
+    #expect(activationCount == 0)
+}
+
+@Test @MainActor func projectFocusRechecksTheOriginalIDEBeforeActivating() async throws {
+    var checks = 0
+    var activationCount = 0
+    try await TerminalFocusService.ensureProjectForeground(
+        // Model the OS reporting the original IDE as foreground on the next
+        // poll, without relying on timer ordering under a busy test main actor.
+        isForeground: {
+            checks += 1
+            return checks > 1
+        },
+        activate: { activationCount += 1 }
+    )
+    #expect(checks > 1)
+    #expect(activationCount == 0)
+}
+
 @Test @MainActor func jetBrainsProjectLaunchUsesTheCommandLineFocusPath() {
     let project = URL(fileURLWithPath: "/work/Project with spaces", isDirectory: true)
     let configuration = TerminalFocusService.jetBrainsProjectConfiguration(for: project)

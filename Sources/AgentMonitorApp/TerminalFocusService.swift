@@ -67,7 +67,29 @@ enum TerminalFocusService {
 
         application.unhide()
         try await openApplication(at: applicationURL, configuration: jetBrainsProjectConfiguration(for: projectURL))
+        // The short-lived launcher can report success even when the IDE fails
+        // to raise its project window. Check the original IDE, not the launcher.
+        try await ensureProjectForeground(
+            isForeground: { NSWorkspace.shared.frontmostApplication?.processIdentifier == pid },
+            activate: { try await activate(host) }
+        )
         return true
+    }
+
+    @MainActor
+    static func ensureProjectForeground(
+        isForeground: () -> Bool,
+        activate: () async throws -> Void
+    ) async throws {
+        let deadline = ContinuousClock.now + .milliseconds(300)
+        while !isForeground() {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else {
+                try await activate()
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     @MainActor
